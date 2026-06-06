@@ -229,12 +229,25 @@ function buildReferenceGuard(referenceScripts: string): string {
   ].join("\n");
 }
 
-function fallbackBlueprint(referenceScripts: string): string {
+function fallbackBlueprint(referenceScripts: string, language = "English"): string {
   const sample = sampleReferenceText(referenceScripts, 12000);
   const sentences = sample.split(/[.!?]+/).map((sentence) => sentence.trim()).filter(Boolean);
   const averageSentenceLength = Math.round(
     sentences.reduce((sum, sentence) => sum + sentence.split(/\s+/).filter(Boolean).length, 0) / Math.max(1, sentences.length)
   );
+
+  if (language === "Russian") {
+    return [
+      "РЕЗЕРВНЫЙ СТИЛЕВОЙ БЛЮПРИНТ",
+      "Источник проанализирован локально, потому что Vertex AI не смог выполнить анализ.",
+      `Средняя длина предложения по оценке: около ${averageSentenceLength} слов.`,
+      "Использовать повествование от первого лица главного героя.",
+      "Открывать историю с немедленного унижения, ошибочного выбора, предательства, перерождения, развода, давления статуса или давления доказательства.",
+      "Держать абзацы короткими, прямыми и удобными для озвучки.",
+      "Каждые несколько абзацев усиливать историю через звонок, пост, контракт, публичную реакцию, улику, ошибку врага или трещину сожаления.",
+      "Переносить только ритм и давление. Не копировать сюжет, имена персонажей, локации, объекты доказательств или точные сцены."
+    ].join("\n");
+  }
 
   return [
     "REFERENCE STYLE BLUEPRINT",
@@ -674,7 +687,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.post("/api/analyze-reference", async (req, res) => {
-  const { competitorScripts } = req.body as { competitorScripts?: string };
+  const { competitorScripts, outputLanguage } = req.body as { competitorScripts?: string; outputLanguage?: string };
 
   if (!competitorScripts || !competitorScripts.trim()) {
     return res.status(400).json({ error: "Paste at least one competitor script first." });
@@ -690,6 +703,10 @@ app.post("/api/analyze-reference", async (req, res) => {
   ].join(" ");
 
   const prompt = `
+OUTPUT LANGUAGE:
+${outputLanguage || "Russian"}
+Return the full blueprint in this language, including heading labels and operational rules.
+
 Analyze the competitor scripts below as style references only.
 
 Do not retell their plots.
@@ -742,7 +759,7 @@ ${sampledReferences}
     });
     res.json({ blueprint, referenceGuard });
   } catch (err: any) {
-    res.json({ blueprint: fallbackBlueprint(competitorScripts), referenceGuard, warning: err.message });
+    res.json({ blueprint: fallbackBlueprint(competitorScripts, outputLanguage || "Russian"), referenceGuard, warning: err.message });
   }
 });
 
@@ -785,6 +802,8 @@ app.post("/api/generate-script-part", async (req, res) => {
     styleBlueprint,
     referenceGuard,
     sceneCardsHandoff,
+    partPlanContext,
+    partSceneContext,
     previousPartsOutput,
     previousPartTail,
     avatarEnabled,
@@ -829,16 +848,29 @@ ${normalizedPartTitle}
 OUTPUT LANGUAGE:
 ${outputLanguage || "English"}
 
+SCRIPT LANGUAGE LOCK
+Write the final script in ${outputLanguage || "English"}.
+Planning notes may be in another language. Convert the logic into natural audience-facing ${outputLanguage || "English"} narration.
+Do not leave planning labels, scene labels, Russian planning prose, or analysis in the final script.
+
 The first line of your response must be exactly:
 ${normalizedPartTitle}
 
 After that first line, write only the final audience-facing narration for this part.
 
+PART-SPECIFIC WRITING REQUEST
+Write ${normalizedPartTitle} according to the current part plan and current part scene cards below.
+Preserve the competitor style blueprint only as style: first-person rhythm, paragraph pressure, hook pacing, regret timing, and payoff density.
+Do not copy competitor plot, names, scenes, proof objects, or dialogue.
+Write in first-person protagonist POV unless the current part scene cards explicitly require a brief different angle.
+Follow the word, character, and paragraph rules exactly.
+Every paragraph must serve the current part plan or current part scene cards.
+
 CURRENT PART LOCK
 You are writing only ${normalizedPartTitle}.
 Do not write any future part.
 Do not rewrite previous parts.
-Use only the Stage Three scene cards assigned to this part.
+Use only the current part plan and Stage Three scene cards assigned to this part.
 If previous text is provided, use it only for continuity and tone.
 
 NICHE PRESET
@@ -853,7 +885,14 @@ ${styleBlueprint || "No extracted blueprint. Use the built-in English manhwa dra
 REFERENCE GUARD
 ${referenceGuard || "Do not copy competitor plot, names, locations, proof objects, exact dialogue, scene choreography, or final collapse mechanics."}
 
-APPROVED STAGE THREE SCENE CARDS AND HANDOFF
+CURRENT PART PLAN PACKAGE
+${partPlanContext || "No focused Stage Two plan was extracted. Use the current part lock and Stage Three scene cards only."}
+
+CURRENT PART SCENE CARDS PACKAGE
+${partSceneContext || sceneCardsHandoff}
+
+FULL SCENE CARD FALLBACK
+Use this only if the current part scene package above is incomplete. Ignore all future parts.
 ${sceneCardsHandoff}
 
 PREVIOUS PARTS AND MEMORY

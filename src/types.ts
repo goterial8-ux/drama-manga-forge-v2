@@ -55,6 +55,8 @@ export interface ForgeState {
   rawIdea: string;
   preset: PresetKey;
   outputLanguage: "English" | "Russian";
+  stageOutputLanguage: "English" | "Russian";
+  scriptOutputLanguage: "English" | "Russian";
   competitorScripts: string;
   styleBlueprint: string;
   referenceGuard: string;
@@ -233,7 +235,9 @@ export const INITIAL_STAGE_DATA: StageData = {
 export const INITIAL_STATE: ForgeState = {
   rawIdea: "",
   preset: "cold_ceo_regret",
-  outputLanguage: "English",
+  outputLanguage: "Russian",
+  stageOutputLanguage: "Russian",
+  scriptOutputLanguage: "English",
   competitorScripts: "",
   styleBlueprint: "",
   referenceGuard: "",

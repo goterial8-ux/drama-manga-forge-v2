@@ -28,6 +28,7 @@ import {
   INITIAL_STATE,
   PARAGRAPH_RULE,
   PART_TARGET,
+  PARTS,
   PRESETS,
   ScriptPart,
   ScriptWriterProvider,
@@ -47,6 +48,8 @@ const CLAUDE_WRITER_MODELS = [
 const GEMINI_WRITER_MODELS = [
   { value: "gemini-3.1-pro-preview", label: "Vertex Gemini 3.1 Pro Preview High" }
 ];
+
+const PART_WORDS = ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"];
 
 type Health = {
   hasClaudeKey: boolean;
@@ -71,6 +74,9 @@ function hydrateState(parsed: Partial<ForgeState>): ForgeState {
     ...INITIAL_STATE,
     ...parsed,
     stages,
+    outputLanguage: parsed.outputLanguage || "Russian",
+    stageOutputLanguage: parsed.stageOutputLanguage || "Russian",
+    scriptOutputLanguage: parsed.scriptOutputLanguage || "English",
     scriptWriterProvider: parsed.scriptWriterProvider || "anthropic",
     scriptWriterClaudeModel: parsed.scriptWriterClaudeModel || INITIAL_STATE.scriptWriterClaudeModel,
     scriptWriterGeminiModel: parsed.scriptWriterGeminiModel || INITIAL_STATE.scriptWriterGeminiModel,
@@ -110,12 +116,52 @@ function stageStatusLabel(status: StageData["status"]) {
   return status.replace("_", " ");
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildPartAliases(partNumber: number, partTitle: string) {
+  const word = PART_WORDS[partNumber - 1] || String(partNumber);
+  return [partTitle, `Part ${word}`, `PART ${word}`, `Part ${partNumber}`, `PART ${partNumber}`, `${partNumber}.`];
+}
+
+function findPartMarker(text: string, aliases: string[], fromIndex = 0) {
+  const slice = text.slice(fromIndex);
+  const candidates = aliases
+    .map((alias) => {
+      const pattern = new RegExp(`(^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\d+\\.\\s*)?${escapeRegExp(alias)}\\b`, "i");
+      const match = pattern.exec(slice);
+      return match ? fromIndex + match.index + match[0].length - alias.length : -1;
+    })
+    .filter((index) => index >= 0);
+
+  return candidates.length ? Math.min(...candidates) : -1;
+}
+
+function extractFocusedPartContext(text: string, partNumber: number, partTitle: string, maxChars = 28000) {
+  const clean = text.replace(/\r/g, "").trim();
+  if (!clean) return "";
+
+  const start = findPartMarker(clean, buildPartAliases(partNumber, partTitle));
+  if (start < 0) return clean.slice(0, maxChars);
+
+  const otherStarts = PARTS
+    .filter((part) => part.number !== partNumber)
+    .map((part) => findPartMarker(clean, buildPartAliases(part.number, part.title), start + 1))
+    .filter((index) => index > start)
+    .sort((a, b) => a - b);
+
+  const end = otherStarts[0] || clean.length;
+  return clean.slice(start, end).trim().slice(0, maxChars);
+}
+
 export default function App() {
   const [state, setState] = useState<ForgeState>(loadInitialState);
   const [health, setHealth] = useState<Health>({ hasClaudeKey: false, hasVertex: false, claudeModel: "claude-sonnet-4-6" });
   const [isExtracting, setIsExtracting] = useState(false);
   const [isGeneratingStage, setIsGeneratingStage] = useState(false);
   const [isWriting, setIsWriting] = useState(false);
+  const [isAutoWriting, setIsAutoWriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const preset = selectedPreset(state);
@@ -197,7 +243,10 @@ export default function App() {
       const res = await fetch("/api/analyze-reference", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ competitorScripts: state.competitorScripts })
+        body: JSON.stringify({
+          competitorScripts: state.competitorScripts,
+          outputLanguage: state.stageOutputLanguage
+        })
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "Failed to extract style blueprint.");
@@ -225,7 +274,7 @@ export default function App() {
           rawIdea: state.rawIdea,
           presetLabel: preset.label,
           presetPromise: preset.promise,
-          outputLanguage: state.outputLanguage,
+          outputLanguage: state.stageOutputLanguage,
           styleBlueprint: state.styleBlueprint,
           referenceGuard: state.referenceGuard,
           previousHandoffs: buildPreviousHandoffs(),
@@ -270,12 +319,20 @@ export default function App() {
     updateState({ notes: "Handoff copied." });
   };
 
-  const generateActivePart = async () => {
-    setIsWriting(true);
-    setError(null);
-
+  const buildPartRequest = (partToWrite: ScriptPart, workingParts: ScriptPart[]) => {
+    const stageTwo = state.stages["02_macro"];
     const stageThree = state.stages["03_scenes"];
-    const previousParts = state.parts.filter((part) => part.number < activePart.number && part.output.trim());
+    const partPlanContext = extractFocusedPartContext(
+      `[STAGE TWO MACRO OUTLINE OUTPUT]\n${stageTwo.output}\n\n[STAGE TWO HANDOFF]\n${stageTwo.handoff}`,
+      partToWrite.number,
+      partToWrite.title
+    );
+    const partSceneContext = extractFocusedPartContext(
+      `[STAGE THREE SCENE CARDS OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
+      partToWrite.number,
+      partToWrite.title
+    );
+    const previousParts = workingParts.filter((part) => part.number < partToWrite.number && part.output.trim());
     const previousPartsOutput = previousParts.map((part) => [
       `--- ${part.title} ---`,
       part.output,
@@ -284,41 +341,133 @@ export default function App() {
     const previousPart = [...previousParts].reverse()[0];
     const writerModel = selectedWriterModel || (state.scriptWriterProvider === "vertex_gemini" ? "gemini-3.1-pro-preview" : health.claudeModel || "claude-sonnet-4-6");
 
+    return {
+      writerModel,
+      body: {
+        partNumber: partToWrite.number,
+        partTitle: partToWrite.title,
+        outputLanguage: state.scriptOutputLanguage,
+        presetLabel: preset.label,
+        presetPromise: preset.promise,
+        styleBlueprint: state.styleBlueprint,
+        referenceGuard: state.referenceGuard,
+        sceneCardsHandoff: `[FULL STAGE THREE OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
+        partPlanContext,
+        partSceneContext,
+        previousPartsOutput,
+        previousPartTail: previousPart ? getPreviousTail(previousPart.output) : "",
+        avatarEnabled: state.avatarEnabled,
+        feedback: partToWrite.feedback,
+        provider: state.scriptWriterProvider,
+        writerModel
+      }
+    };
+  };
+
+  const writeScriptPart = async (partToWrite: ScriptPart, workingParts: ScriptPart[]) => {
+    const { body, writerModel } = buildPartRequest(partToWrite, workingParts);
+    const res = await fetch("/api/generate-script-part", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Failed to generate ${partToWrite.title}.`);
+
+    const checks = validatePart(data.output, partToWrite.title, partToWrite.number, state.avatarEnabled);
+    const updatedPart: ScriptPart = {
+      ...partToWrite,
+      output: data.output,
+      memory: data.memory || buildMemoryFromPart(partToWrite.title, data.output),
+      status: checks.some((issue) => issue.severity === "error") ? "needs_repair" : "draft",
+      checks
+    };
+
+    return {
+      updatedPart,
+      provider: data.provider || state.scriptWriterProvider,
+      model: data.model || writerModel
+    };
+  };
+
+  const generateActivePart = async () => {
+    setIsWriting(true);
+    setError(null);
+
     try {
-      const res = await fetch("/api/generate-script-part", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          partNumber: activePart.number,
-          partTitle: activePart.title,
-          outputLanguage: state.outputLanguage,
-          presetLabel: preset.label,
-          presetPromise: preset.promise,
-          styleBlueprint: state.styleBlueprint,
-          referenceGuard: state.referenceGuard,
-          sceneCardsHandoff: `[FULL STAGE THREE OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
-          previousPartsOutput,
-          previousPartTail: previousPart ? getPreviousTail(previousPart.output) : "",
-          avatarEnabled: state.avatarEnabled,
-          feedback: activePart.feedback,
-          provider: state.scriptWriterProvider,
-          writerModel
-        })
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "Failed to generate script part.");
-      const checks = validatePart(data.output, activePart.title, activePart.number, state.avatarEnabled);
+      const { updatedPart, provider, model } = await writeScriptPart(activePart, state.parts);
       updatePart(activePart.number, {
-        output: data.output,
-        memory: data.memory || buildMemoryFromPart(activePart.title, data.output),
-        status: checks.some((issue) => issue.severity === "error") ? "needs_repair" : "draft",
-        checks
+        output: updatedPart.output,
+        memory: updatedPart.memory,
+        status: updatedPart.status,
+        checks: updatedPart.checks
       });
-      updateState({ notes: `${activePart.title} written with ${data.provider || state.scriptWriterProvider} / ${data.model || writerModel}.` });
+      updateState({ notes: `${activePart.title} written with ${provider} / ${model}.` });
     } catch (err: any) {
       setError(err.message || "Could not generate script part.");
     } finally {
       setIsWriting(false);
+    }
+  };
+
+  const autoGenerateAllParts = async () => {
+    if (!state.stages["03_scenes"].output.trim()) return;
+
+    const hasExistingOutput = state.parts.some((part) => part.output.trim());
+    if (hasExistingOutput && !window.confirm("Auto-generate all nine parts and overwrite existing drafts?")) return;
+
+    setIsAutoWriting(true);
+    setError(null);
+
+    let workingParts = state.parts.map((part) => ({ ...part, output: "", memory: "", status: "empty" as const, checks: [] }));
+    setState((prev) => ({
+      ...prev,
+      selectedPart: 1,
+      parts: workingParts,
+      notes: `Auto-generation started with ${selectedWriterModelLabel}.`
+    }));
+
+    try {
+      for (const basePart of PARTS) {
+        const partToWrite = workingParts.find((part) => part.number === basePart.number) || {
+          ...basePart,
+          output: "",
+          memory: "",
+          feedback: "",
+          status: "empty" as const,
+          checks: []
+        };
+
+        setState((prev) => ({
+          ...prev,
+          selectedPart: partToWrite.number,
+          notes: `Auto-writing ${partToWrite.title} with ${selectedWriterModelLabel}.`
+        }));
+
+        const { updatedPart, provider, model } = await writeScriptPart(partToWrite, workingParts);
+        workingParts = workingParts.map((part) => (part.number === updatedPart.number ? updatedPart : part));
+
+        setState((prev) => ({
+          ...prev,
+          selectedPart: updatedPart.number,
+          parts: prev.parts.map((part) => (part.number === updatedPart.number ? updatedPart : part)),
+          notes: `${updatedPart.title} completed with ${provider} / ${model}.`
+        }));
+      }
+
+      setState((prev) => ({
+        ...prev,
+        selectedPart: 9,
+        notes: "Auto-generation completed for all nine parts."
+      }));
+    } catch (err: any) {
+      setError(err.message || "Auto-generation stopped.");
+      setState((prev) => ({
+        ...prev,
+        notes: "Auto-generation stopped. Review the last completed part before continuing."
+      }));
+    } finally {
+      setIsAutoWriting(false);
     }
   };
 
@@ -384,8 +533,26 @@ export default function App() {
               <p>{preset.promise}</p>
             </div>
             <label>
-              Output language
-              <select value={state.outputLanguage} onChange={(e) => updateState({ outputLanguage: e.target.value as ForgeState["outputLanguage"] })}>
+              Planning language
+              <select
+                value={state.stageOutputLanguage}
+                onChange={(e) =>
+                  updateState({
+                    stageOutputLanguage: e.target.value as ForgeState["stageOutputLanguage"],
+                    outputLanguage: e.target.value as ForgeState["outputLanguage"]
+                  })
+                }
+              >
+                <option value="Russian">Russian</option>
+                <option value="English">English</option>
+              </select>
+            </label>
+            <label>
+              Script language
+              <select
+                value={state.scriptOutputLanguage}
+                onChange={(e) => updateState({ scriptOutputLanguage: e.target.value as ForgeState["scriptOutputLanguage"] })}
+              >
                 <option value="English">English</option>
                 <option value="Russian">Russian</option>
               </select>
@@ -525,6 +692,7 @@ export default function App() {
                   <select
                     value={state.scriptWriterProvider}
                     onChange={(e) => updateState({ scriptWriterProvider: e.target.value as ScriptWriterProvider })}
+                    disabled={isWriting || isAutoWriting}
                   >
                     <option value="anthropic">Claude writer</option>
                     <option value="vertex_gemini">Vertex Gemini writer</option>
@@ -534,6 +702,7 @@ export default function App() {
                   Writer model
                   <select
                     value={selectedWriterModel}
+                    disabled={isWriting || isAutoWriting}
                     onChange={(e) =>
                       state.scriptWriterProvider === "vertex_gemini"
                         ? updateState({ scriptWriterGeminiModel: e.target.value })
@@ -547,25 +716,29 @@ export default function App() {
                     ))}
                   </select>
                 </label>
-                <button className="secondary-button" onClick={checkActivePart} disabled={!activePart.output}>
+                <button className="secondary-button" onClick={checkActivePart} disabled={isAutoWriting || !activePart.output}>
                   <Gauge size={16} />
                   Check Part
                 </button>
-                <button className="secondary-button" onClick={approveActivePart} disabled={!activePart.output}>
+                <button className="secondary-button" onClick={approveActivePart} disabled={isAutoWriting || !activePart.output}>
                   <Check size={16} />
                   Approve Part
                 </button>
                 <button
                   className="secondary-button"
                   onClick={() => downloadTxt(`${activePart.title.toLowerCase().replace(/\s+/g, "-")}.txt`, activePart.output)}
-                  disabled={!activePart.output}
+                  disabled={isAutoWriting || !activePart.output}
                 >
                   <Download size={16} />
                   Part TXT
                 </button>
-                <button className="primary-button" onClick={generateActivePart} disabled={isWriting || !state.stages["03_scenes"].output.trim()}>
+                <button className="primary-button" onClick={generateActivePart} disabled={isWriting || isAutoWriting || !state.stages["03_scenes"].output.trim()}>
                   {isWriting ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
                   Generate {activePart.title}
+                </button>
+                <button className="secondary-button" onClick={autoGenerateAllParts} disabled={isWriting || isAutoWriting || !state.stages["03_scenes"].output.trim()}>
+                  {isAutoWriting ? <RefreshCw className="spin" size={16} /> : <WandSparkles size={16} />}
+                  Auto 1-9
                 </button>
               </div>
             </div>
@@ -627,6 +800,8 @@ export default function App() {
               <p>Macro outline: Gemini 2.5 Pro, optional.</p>
               <p>Scene cards: Gemini 2.5 Pro.</p>
               <p>Writer switch: Claude model or Vertex Gemini model selected in Stage Four.</p>
+              <p>Planning language: {state.stageOutputLanguage}.</p>
+              <p>Script language: {state.scriptOutputLanguage}.</p>
               <p>Part target: {PART_TARGET.idealMin.toLocaleString()}-{PART_TARGET.idealMax.toLocaleString()} chars.</p>
               <p>Paragraph: {PARAGRAPH_RULE.minWords}-{PARAGRAPH_RULE.maxWords} words, {PARAGRAPH_RULE.minChars}-{PARAGRAPH_RULE.maxChars} chars.</p>
             </div>
