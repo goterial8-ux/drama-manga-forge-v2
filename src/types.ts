@@ -6,6 +6,11 @@ export type PresetKey =
   | "ceo_family_child"
   | "overpowered_villain";
 
+export type StageStatus = "not_started" | "draft" | "approved" | "needs_repair";
+export type PartStatus = "empty" | "draft" | "checked" | "approved" | "needs_repair";
+export type ScriptWriterProvider = "anthropic" | "vertex_gemini";
+export type StageKey = "00_idea" | "01_foundation" | "02_macro" | "03_scenes";
+
 export interface NichePreset {
   key: PresetKey;
   label: string;
@@ -14,12 +19,30 @@ export interface NichePreset {
   avoid: string[];
 }
 
+export interface StageConfig {
+  id: number;
+  key: StageKey;
+  code: string;
+  name: string;
+  model: string;
+  description: string;
+  optional?: boolean;
+}
+
+export interface StageData {
+  output: string;
+  handoff: string;
+  status: StageStatus;
+  feedback: string;
+}
+
 export interface ScriptPart {
   number: number;
   title: string;
   output: string;
   memory: string;
-  status: "empty" | "draft" | "checked" | "needs_repair";
+  feedback: string;
+  status: PartStatus;
   checks: CheckIssue[];
 }
 
@@ -35,15 +58,53 @@ export interface ForgeState {
   competitorScripts: string;
   styleBlueprint: string;
   referenceGuard: string;
-  storyDna: string;
-  sceneCards: string;
-  avatarEnabled: boolean;
+  activeStageIdx: number;
+  stages: Record<StageKey, StageData>;
+  scriptWriterProvider: ScriptWriterProvider;
   selectedPart: number;
   parts: ScriptPart[];
+  avatarEnabled: boolean;
   notes: string;
+  warnings: string[];
 }
 
-export const PARTS: Omit<ScriptPart, "output" | "memory" | "status" | "checks">[] = [
+export const STAGES_CONFIG: StageConfig[] = [
+  {
+    id: 0,
+    key: "00_idea",
+    code: "00",
+    name: "Idea Setup",
+    model: "gemini-2.5-flash",
+    description: "Develop the title, hook, raw idea, originality guard, and producer handoff."
+  },
+  {
+    id: 1,
+    key: "01_foundation",
+    code: "01",
+    name: "Foundation DNA",
+    model: "gemini-2.5-flash",
+    description: "Lock character functions, proof system, regret ladder, hidden cards, and payoff logic."
+  },
+  {
+    id: 2,
+    key: "02_macro",
+    code: "02",
+    name: "Macro Outline",
+    model: "gemini-2.5-pro",
+    description: "Optional nine-part master plan with length, payoff, avatar, and scene requirements.",
+    optional: true
+  },
+  {
+    id: 3,
+    key: "03_scenes",
+    code: "03",
+    name: "Scene Cards",
+    model: "gemini-2.5-pro",
+    description: "Detailed scene matrix for all parts. This is the source of truth for the writer."
+  }
+];
+
+export const PARTS: Omit<ScriptPart, "output" | "memory" | "feedback" | "status" | "checks">[] = [
   { number: 1, title: "PART ONE" },
   { number: 2, title: "PART TWO" },
   { number: 3, title: "PART THREE" },
@@ -160,6 +221,13 @@ export const PRESETS: NichePreset[] = [
   }
 ];
 
+export const INITIAL_STAGE_DATA: StageData = {
+  output: "",
+  handoff: "",
+  status: "not_started",
+  feedback: ""
+};
+
 export const INITIAL_STATE: ForgeState = {
   rawIdea: "",
   preset: "cold_ceo_regret",
@@ -167,16 +235,24 @@ export const INITIAL_STATE: ForgeState = {
   competitorScripts: "",
   styleBlueprint: "",
   referenceGuard: "",
-  storyDna: "",
-  sceneCards: "",
-  avatarEnabled: true,
+  activeStageIdx: 0,
+  stages: {
+    "00_idea": { ...INITIAL_STAGE_DATA },
+    "01_foundation": { ...INITIAL_STAGE_DATA },
+    "02_macro": { ...INITIAL_STAGE_DATA },
+    "03_scenes": { ...INITIAL_STAGE_DATA }
+  },
+  scriptWriterProvider: "anthropic",
   selectedPart: 1,
   parts: PARTS.map((part) => ({
     ...part,
     output: "",
     memory: "",
+    feedback: "",
     status: "empty",
     checks: []
   })),
-  notes: "Paste competitor scripts, extract a style blueprint, lock story DNA and scene cards, then let Claude write one part at a time."
+  avatarEnabled: true,
+  notes: "Start with the title or raw situation, extract competitor style, generate the planning stages, then write one part at a time.",
+  warnings: []
 };
