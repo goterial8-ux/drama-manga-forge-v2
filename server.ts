@@ -45,7 +45,6 @@ type StageRequest = {
   feedback?: string;
 };
 
-const CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
 const DEFAULT_GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
@@ -60,7 +59,7 @@ function envFlag(value: string | undefined): boolean {
 }
 
 function getClaudeModel(model?: string): string {
-  return model || process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
+  return model || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
 }
 
 function getScriptWriterProvider(provider?: string): "anthropic" | "vertex_gemini" {
@@ -129,18 +128,31 @@ async function callVertexGemini({
 }
 
 async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8, model }: ClaudeCallOptions): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  // Пытаемся получить TKBK API ключ (который начинается с cr_), иначе фоллбэк на Anthropic
+  const apiKey = process.env.TKBK_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    throw new Error("Missing ANTHROPIC_API_KEY. Put it in .env.local or deployment secrets.");
+    throw new Error("Missing Claude API key. Add a Claude-compatible key to deployment secrets.");
   }
 
-  const response = await fetch(CLAUDE_API_URL, {
+  // Если ключ начинается с cr_, шлем запросы на tkbk.io, иначе в стандартный Anthropic API
+  const isTkbk = apiKey.startsWith("cr_");
+  const url = isTkbk ? "https://api.tkbk.io/claude/v1/messages" : "https://api.anthropic.com/v1/messages";
+
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "anthropic-version": ANTHROPIC_VERSION
+  };
+
+  // Правильная авторизация для TKBK
+  if (isTkbk) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  } else {
+    headers["x-api-key"] = apiKey;
+  }
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_VERSION
-    },
+    headers,
     body: JSON.stringify({
       model: getClaudeModel(model),
       max_tokens: maxTokens,
@@ -158,7 +170,7 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
   const data = await response.json();
 
   if (!response.ok) {
-    const message = data?.error?.message || data?.message || `Claude API failed with ${response.status}`;
+    const message = data?.error?.message || data?.message || `API failed with ${response.status}`;
     throw new Error(message);
   }
 
@@ -189,29 +201,8 @@ function sampleReferenceText(text: string, maxChars = 90000): string {
 
 function buildReferenceGuard(referenceScripts: string): string {
   const common = new Set([
-    "The",
-    "This",
-    "That",
-    "Then",
-    "When",
-    "After",
-    "Before",
-    "Because",
-    "But",
-    "And",
-    "His",
-    "Her",
-    "She",
-    "He",
-    "They",
-    "You",
-    "CEO",
-    "Miss",
-    "Mr",
-    "Mom",
-    "Dad",
-    "Part",
-    "Chapter"
+    "The", "This", "That", "Then", "When", "After", "Before", "Because", "But", "And",
+    "His", "Her", "She", "He", "They", "You", "CEO", "Miss", "Mr", "Mom", "Dad", "Part", "Chapter"
   ]);
 
   const counts = new Map<string, number>();
@@ -657,9 +648,13 @@ function buildMemory(partTitle: string, output: string): string {
 
 app.get("/api/health", (_req, res) => {
   const useVertex = envFlag(process.env.GOOGLE_GENAI_USE_VERTEXAI);
+  const hasTkbkKey = Boolean(process.env.TKBK_API_KEY);
+  const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY);
   res.json({
     status: "ok",
-    hasClaudeKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    hasTkbkKey,
+    hasOfficialAnthropicKey: hasAnthropicKey,
+    hasClaudeKey: hasTkbkKey || hasAnthropicKey,
     hasVertex: Boolean(useVertex && process.env.GOOGLE_CLOUD_PROJECT),
     claudeModel: getClaudeModel(),
     scriptWriterProvider: getScriptWriterProvider(),
@@ -806,6 +801,7 @@ app.post("/api/generate-script-part", async (req, res) => {
     return res.status(400).json({ error: "Stage Three scene cards are required before writing." });
   }
 
+  // Переключение провайдера для генерации сценария. Поддерживаем выбор между Vertex AI и Claude (tkbk API)
   const resolvedProvider = getScriptWriterProvider(provider);
   const normalizedPartTitle = String(partTitle).toUpperCase();
   const shouldAvatar = Boolean(avatarEnabled) && [3, 6, 9].includes(Number(partNumber));

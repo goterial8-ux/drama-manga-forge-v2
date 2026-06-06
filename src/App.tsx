@@ -38,8 +38,19 @@ import {
 
 const STORAGE_KEY = "drama_manga_forge_v2_state";
 
+const CLAUDE_WRITER_MODELS = [
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" }
+];
+
+const GEMINI_WRITER_MODELS = [
+  { value: "gemini-3.1-pro-preview", label: "Vertex Gemini 3.1 Pro Preview High" }
+];
+
 type Health = {
   hasClaudeKey: boolean;
+  hasTkbkKey?: boolean;
   hasVertex: boolean;
   claudeModel: string;
   scriptWriterProvider?: ScriptWriterProvider;
@@ -61,6 +72,8 @@ function hydrateState(parsed: Partial<ForgeState>): ForgeState {
     ...parsed,
     stages,
     scriptWriterProvider: parsed.scriptWriterProvider || "anthropic",
+    scriptWriterClaudeModel: parsed.scriptWriterClaudeModel || INITIAL_STATE.scriptWriterClaudeModel,
+    scriptWriterGeminiModel: parsed.scriptWriterGeminiModel || INITIAL_STATE.scriptWriterGeminiModel,
     parts: INITIAL_STATE.parts.map((basePart) => {
       const existing = parsed.parts?.find((part) => part.number === basePart.number);
       return existing ? { ...basePart, ...existing, checks: existing.checks || [] } : basePart;
@@ -110,6 +123,10 @@ export default function App() {
   const activeStageData = state.stages[activeStageConfig.key];
   const activePart = state.parts.find((part) => part.number === state.selectedPart) || state.parts[0];
   const activeMetrics = getMetrics(activePart.output);
+  const hasClaudeWriterKey = Boolean(health.hasClaudeKey || health.hasTkbkKey);
+  const selectedWriterModel = state.scriptWriterProvider === "vertex_gemini" ? state.scriptWriterGeminiModel : state.scriptWriterClaudeModel;
+  const selectedWriterModelLabel =
+    [...CLAUDE_WRITER_MODELS, ...GEMINI_WRITER_MODELS].find((item) => item.value === selectedWriterModel)?.label || selectedWriterModel;
   const combinedScript = useMemo(
     () => state.parts.map((part) => part.output.trim()).filter(Boolean).join("\n\n"),
     [state.parts]
@@ -124,7 +141,8 @@ export default function App() {
       .then((res) => res.json())
       .then((data) =>
         setHealth({
-          hasClaudeKey: data.hasClaudeKey,
+          hasClaudeKey: Boolean(data.hasClaudeKey),
+          hasTkbkKey: Boolean(data.hasTkbkKey),
           hasVertex: data.hasVertex,
           claudeModel: data.claudeModel || "claude-sonnet-4-6",
           scriptWriterProvider: data.scriptWriterProvider,
@@ -264,7 +282,7 @@ export default function App() {
       part.memory ? `[MEMORY]\n${part.memory}` : ""
     ].filter(Boolean).join("\n"));
     const previousPart = [...previousParts].reverse()[0];
-    const writerModel = state.scriptWriterProvider === "vertex_gemini" ? "gemini-3.1-pro-preview" : health.claudeModel || "claude-sonnet-4-6";
+    const writerModel = selectedWriterModel || (state.scriptWriterProvider === "vertex_gemini" ? "gemini-3.1-pro-preview" : health.claudeModel || "claude-sonnet-4-6");
 
     try {
       const res = await fetch("/api/generate-script-part", {
@@ -296,7 +314,7 @@ export default function App() {
         status: checks.some((issue) => issue.severity === "error") ? "needs_repair" : "draft",
         checks
       });
-      updateState({ notes: `${activePart.title} written with ${data.provider || state.scriptWriterProvider}.` });
+      updateState({ notes: `${activePart.title} written with ${data.provider || state.scriptWriterProvider} / ${data.model || writerModel}.` });
     } catch (err: any) {
       setError(err.message || "Could not generate script part.");
     } finally {
@@ -332,8 +350,8 @@ export default function App() {
         </div>
         <div className="status-row">
           <span className={health.hasVertex ? "pill ok" : "pill warn"}>{health.hasVertex ? "Vertex ready" : "Vertex missing"}</span>
-          <span className={health.hasClaudeKey ? "pill ok" : "pill warn"}>{health.hasClaudeKey ? "Claude key loaded" : "Claude key missing"}</span>
-          <span className="pill">Writer: {state.scriptWriterProvider === "vertex_gemini" ? "Gemini High" : "Claude 4.6"}</span>
+          <span className={hasClaudeWriterKey ? "pill ok" : "pill warn"}>{hasClaudeWriterKey ? "Claude key loaded" : "Claude key missing"}</span>
+          <span className="pill">Writer: {selectedWriterModelLabel}</span>
         </div>
       </header>
 
@@ -503,13 +521,30 @@ export default function App() {
               </div>
               <div className="writer-actions">
                 <label className="compact-label">
-                  Writer model
+                  Writer provider
                   <select
                     value={state.scriptWriterProvider}
                     onChange={(e) => updateState({ scriptWriterProvider: e.target.value as ScriptWriterProvider })}
                   >
-                    <option value="anthropic">Claude Sonnet 4.6</option>
-                    <option value="vertex_gemini">Vertex Gemini 3.1 Pro Preview High</option>
+                    <option value="anthropic">Claude writer</option>
+                    <option value="vertex_gemini">Vertex Gemini writer</option>
+                  </select>
+                </label>
+                <label className="compact-label">
+                  Writer model
+                  <select
+                    value={selectedWriterModel}
+                    onChange={(e) =>
+                      state.scriptWriterProvider === "vertex_gemini"
+                        ? updateState({ scriptWriterGeminiModel: e.target.value })
+                        : updateState({ scriptWriterClaudeModel: e.target.value })
+                    }
+                  >
+                    {(state.scriptWriterProvider === "vertex_gemini" ? GEMINI_WRITER_MODELS : CLAUDE_WRITER_MODELS).map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <button className="secondary-button" onClick={checkActivePart} disabled={!activePart.output}>
@@ -591,7 +626,7 @@ export default function App() {
               <p>Stage Zero and One: {health.stageModels?.idea || "gemini-2.5-flash"}.</p>
               <p>Macro outline: Gemini 2.5 Pro, optional.</p>
               <p>Scene cards: Gemini 2.5 Pro.</p>
-              <p>Writer switch: Claude Sonnet 4.6 or Vertex Gemini 3.1 Pro Preview High.</p>
+              <p>Writer switch: Claude model or Vertex Gemini model selected in Stage Four.</p>
               <p>Part target: {PART_TARGET.idealMin.toLocaleString()}-{PART_TARGET.idealMax.toLocaleString()} chars.</p>
               <p>Paragraph: {PARAGRAPH_RULE.minWords}-{PARAGRAPH_RULE.maxWords} words, {PARAGRAPH_RULE.minChars}-{PARAGRAPH_RULE.maxChars} chars.</p>
             </div>

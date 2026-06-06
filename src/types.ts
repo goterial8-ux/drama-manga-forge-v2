@@ -61,6 +61,8 @@ export interface ForgeState {
   activeStageIdx: number;
   stages: Record<StageKey, StageData>;
   scriptWriterProvider: ScriptWriterProvider;
+  scriptWriterClaudeModel: string;
+  scriptWriterGeminiModel: string;
   selectedPart: number;
   parts: ScriptPart[];
   avatarEnabled: boolean;
@@ -243,6 +245,8 @@ export const INITIAL_STATE: ForgeState = {
     "03_scenes": { ...INITIAL_STAGE_DATA }
   },
   scriptWriterProvider: "anthropic",
+  scriptWriterClaudeModel: "claude-sonnet-4-6",
+  scriptWriterGeminiModel: "gemini-3.1-pro-preview",
   selectedPart: 1,
   parts: PARTS.map((part) => ({
     ...part,
