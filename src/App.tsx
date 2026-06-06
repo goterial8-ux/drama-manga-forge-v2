@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -155,6 +155,17 @@ function extractFocusedPartContext(text: string, partNumber: number, partTitle: 
   return clean.slice(start, end).trim().slice(0, maxChars);
 }
 
+async function readJsonResponse(res: Response): Promise<any> {
+  const raw = await res.text();
+  if (!raw.trim()) return {};
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`Server returned non-JSON (${res.status}): ${raw.slice(0, 1000)}`);
+  }
+}
+
 export default function App() {
   const [state, setState] = useState<ForgeState>(loadInitialState);
   const [health, setHealth] = useState<Health>({ hasClaudeKey: false, hasVertex: false, claudeModel: "claude-sonnet-4-6" });
@@ -162,6 +173,8 @@ export default function App() {
   const [isGeneratingStage, setIsGeneratingStage] = useState(false);
   const [isWriting, setIsWriting] = useState(false);
   const [isAutoWriting, setIsAutoWriting] = useState(false);
+  const autoCancelRef = useRef(false);
+  const autoAbortRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const preset = selectedPreset(state);
@@ -177,6 +190,13 @@ export default function App() {
     () => state.parts.map((part) => part.output.trim()).filter(Boolean).join("\n\n"),
     [state.parts]
   );
+  const nextAutoPart = state.parts.find((part) => !part.output.trim());
+  const hasAnyDraftPart = state.parts.some((part) => part.output.trim());
+  const autoButtonLabel = nextAutoPart
+    ? hasAnyDraftPart
+      ? `Continue from ${nextAutoPart.title}`
+      : "Auto 1-9"
+    : "All parts drafted";
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -184,7 +204,7 @@ export default function App() {
 
   useEffect(() => {
     fetch("/api/health")
-      .then((res) => res.json())
+      .then(readJsonResponse)
       .then((data) =>
         setHealth({
           hasClaudeKey: Boolean(data.hasClaudeKey),
@@ -248,7 +268,7 @@ export default function App() {
           outputLanguage: state.stageOutputLanguage
         })
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok || data.error) throw new Error(data.error || "Failed to extract style blueprint.");
       updateState({
         styleBlueprint: data.blueprint,
@@ -281,7 +301,7 @@ export default function App() {
           feedback: activeStageData.feedback
         })
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok || data.error) throw new Error(data.error || "Failed to generate stage.");
       updateStage(activeStageConfig.key, {
         output: data.output,
@@ -364,14 +384,15 @@ export default function App() {
     };
   };
 
-  const writeScriptPart = async (partToWrite: ScriptPart, workingParts: ScriptPart[]) => {
+  const writeScriptPart = async (partToWrite: ScriptPart, workingParts: ScriptPart[], signal?: AbortSignal) => {
     const { body, writerModel } = buildPartRequest(partToWrite, workingParts);
     const res = await fetch("/api/generate-script-part", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok || data.error) throw new Error(data.error || `Failed to generate ${partToWrite.title}.`);
 
     const checks = validatePart(data.output, partToWrite.title, partToWrite.number, state.avatarEnabled);
@@ -413,30 +434,32 @@ export default function App() {
   const autoGenerateAllParts = async () => {
     if (!state.stages["03_scenes"].output.trim()) return;
 
-    const hasExistingOutput = state.parts.some((part) => part.output.trim());
-    if (hasExistingOutput && !window.confirm("Auto-generate all nine parts and overwrite existing drafts?")) return;
+    const firstPendingPart = state.parts.find((part) => !part.output.trim());
+    if (!firstPendingPart) {
+      updateState({ notes: "All nine parts already have drafts. Use Generate PART to rewrite a specific part." });
+      return;
+    }
 
+    autoCancelRef.current = false;
     setIsAutoWriting(true);
     setError(null);
 
-    let workingParts = state.parts.map((part) => ({ ...part, output: "", memory: "", status: "empty" as const, checks: [] }));
+    let workingParts = state.parts.map((part) => ({ ...part }));
     setState((prev) => ({
       ...prev,
-      selectedPart: 1,
-      parts: workingParts,
-      notes: `Auto-generation started with ${selectedWriterModelLabel}.`
+      selectedPart: firstPendingPart.number,
+      notes: `Auto-generation continuing from ${firstPendingPart.title} with ${selectedWriterModelLabel}. Existing drafted parts will be kept.`
     }));
 
     try {
-      for (const basePart of PARTS) {
-        const partToWrite = workingParts.find((part) => part.number === basePart.number) || {
-          ...basePart,
-          output: "",
-          memory: "",
-          feedback: "",
-          status: "empty" as const,
-          checks: []
-        };
+      const pendingParts = PARTS
+        .map((basePart) => workingParts.find((part) => part.number === basePart.number))
+        .filter((part): part is ScriptPart => Boolean(part && !part.output.trim()));
+
+      for (const partToWrite of pendingParts) {
+        if (autoCancelRef.current) {
+          throw new Error("Auto-generation canceled by user.");
+        }
 
         setState((prev) => ({
           ...prev,
@@ -444,7 +467,11 @@ export default function App() {
           notes: `Auto-writing ${partToWrite.title} with ${selectedWriterModelLabel}.`
         }));
 
-        const { updatedPart, provider, model } = await writeScriptPart(partToWrite, workingParts);
+        const abortController = new AbortController();
+        autoAbortRef.current = abortController;
+
+        const { updatedPart, provider, model } = await writeScriptPart(partToWrite, workingParts, abortController.signal);
+        autoAbortRef.current = null;
         workingParts = workingParts.map((part) => (part.number === updatedPart.number ? updatedPart : part));
 
         setState((prev) => ({
@@ -458,17 +485,29 @@ export default function App() {
       setState((prev) => ({
         ...prev,
         selectedPart: 9,
-        notes: "Auto-generation completed for all nine parts."
+        notes: "Auto-generation completed for all remaining parts."
       }));
     } catch (err: any) {
-      setError(err.message || "Auto-generation stopped.");
+      autoAbortRef.current = null;
+      const wasCanceled = autoCancelRef.current || err?.name === "AbortError";
+      setError(wasCanceled ? null : err.message || "Auto-generation stopped.");
       setState((prev) => ({
         ...prev,
-        notes: "Auto-generation stopped. Review the last completed part before continuing."
+        notes: wasCanceled
+          ? "Auto-generation canceled. Press Continue to resume from the first unfinished part."
+          : "Auto-generation stopped. Press Continue to resume from the first unfinished part."
       }));
     } finally {
+      autoCancelRef.current = false;
+      autoAbortRef.current = null;
       setIsAutoWriting(false);
     }
+  };
+
+  const cancelAutoGeneration = () => {
+    autoCancelRef.current = true;
+    autoAbortRef.current?.abort();
+    updateState({ notes: "Cancel requested. The current auto-generation request is being stopped." });
   };
 
   const checkActivePart = () => {
@@ -736,10 +775,16 @@ export default function App() {
                   {isWriting ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
                   Generate {activePart.title}
                 </button>
-                <button className="secondary-button" onClick={autoGenerateAllParts} disabled={isWriting || isAutoWriting || !state.stages["03_scenes"].output.trim()}>
-                  {isAutoWriting ? <RefreshCw className="spin" size={16} /> : <WandSparkles size={16} />}
-                  Auto 1-9
+                <button className="secondary-button" onClick={autoGenerateAllParts} disabled={isWriting || isAutoWriting || !state.stages["03_scenes"].output.trim() || !nextAutoPart}>
+                  <WandSparkles size={16} />
+                  {autoButtonLabel}
                 </button>
+                {isAutoWriting && (
+                  <button className="secondary-button" onClick={cancelAutoGeneration}>
+                    <AlertTriangle size={16} />
+                    Cancel auto
+                  </button>
+                )}
               </div>
             </div>
 

@@ -96,6 +96,10 @@ function stripThinkingBlocks(text: string): string {
   return text.replace(/<(thought|thinking)>[\s\S]*?<\/\1>/gi, "").trim();
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function callVertexGemini({
   system,
   prompt,
@@ -150,37 +154,75 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
     headers["x-api-key"] = apiKey;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: getClaudeModel(model),
-      max_tokens: maxTokens,
-      temperature,
-      system,
-      messages: [
-        {
-          role: "user",
-          content: prompt
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: getClaudeModel(model),
+        max_tokens: maxTokens,
+        temperature,
+        system,
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    const raw = await response.text();
+    let data: any = null;
+
+    if (raw.trim()) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        lastError = new Error(
+          `Claude upstream returned non-JSON (${response.status} ${response.statusText}): ${raw.slice(0, 1000)}`
+        );
+
+        if (response.status >= 500 && attempt < 3) {
+          await wait(900 * attempt);
+          continue;
         }
-      ]
-    })
-  });
 
-  const data = await response.json();
+        throw lastError;
+      }
+    }
 
-  if (!response.ok) {
-    const message = data?.error?.message || data?.message || `API failed with ${response.status}`;
-    throw new Error(message);
+    if (!response.ok) {
+      const message = data?.error?.message || data?.message || `Claude upstream failed with ${response.status} ${response.statusText}`;
+      lastError = new Error(message);
+
+      if ((response.status === 429 || response.status >= 500) && attempt < 3) {
+        await wait(900 * attempt);
+        continue;
+      }
+
+      throw lastError;
+    }
+
+    const textBlocks = Array.isArray(data?.content)
+      ? data.content
+          .filter((block: any) => block?.type === "text" && typeof block?.text === "string")
+          .map((block: any) => block.text)
+      : [];
+
+    const text = textBlocks.join("\n").trim();
+    if (text) return text;
+
+    lastError = new Error("Claude upstream returned JSON without text content.");
+    if (attempt < 3) {
+      await wait(900 * attempt);
+      continue;
+    }
   }
 
-  const textBlocks = Array.isArray(data.content)
-    ? data.content
-        .filter((block: any) => block?.type === "text" && typeof block?.text === "string")
-        .map((block: any) => block.text)
-    : [];
-
-  return textBlocks.join("\n").trim();
+  throw lastError || new Error("Claude upstream failed without an error response.");
 }
 
 function sampleReferenceText(text: string, maxChars = 90000): string {
