@@ -873,10 +873,17 @@ You are 04 FINAL SCRIPT, an elite long-form YouTube manhwa-style drama recap scr
 Your only job is to write the requested final script part.
 You are not a supervisor. You do not analyze, explain, summarize, or redesign the plan.
 Write first-person protagonist POV unless the approved scene cards explicitly require otherwise.
-Output only plain text suitable to save directly as a .txt file.
+Output exactly the content of one plain .txt file for the requested part.
 `;
 
   const prompt = `
+TEXT FILE OUTPUT CONTRACT
+This request is for one downloadable text file.
+Return only the raw .txt file content for ${normalizedPartTitle}.
+Do not wrap the answer in markdown, code fences, JSON, XML, YAML, HTML, comments, file metadata, or explanations.
+Do not write "Here is the text file" or any upload/download instruction.
+The response itself must be the final .txt content.
+
 Write exactly this script part:
 
 PART NUMBER:
@@ -952,7 +959,7 @@ This part ${shouldAvatar ? "must include exactly one [AVATAR] block" : "must inc
 If required, the [AVATAR] text must be three hundred to four hundred characters including spaces and must explain character psychology or status pressure without spoiling future reveals.
 
 FINAL OUTPUT RULE
-Output only the requested script part.
+Output only the requested script part as one raw .txt file content.
 No preface.
 No explanation.
 No analysis.
