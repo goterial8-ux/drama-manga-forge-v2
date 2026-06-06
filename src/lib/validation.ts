@@ -60,6 +60,21 @@ export function validatePart(text: string, partTitle: string, partNumber: number
     issues.push({ severity: "ok", message: "Part length is inside the ideal character range." });
   }
 
+  const totalWords = countWords(clean);
+  if (totalWords < PART_TARGET.wordMin) {
+    issues.push({
+      severity: "warning",
+      message: `Below word target: ${totalWords.toLocaleString()} words. Target starts at ${PART_TARGET.wordMin.toLocaleString()}.`
+    });
+  } else if (totalWords > PART_TARGET.wordMax) {
+    issues.push({
+      severity: "warning",
+      message: `Above word target: ${totalWords.toLocaleString()} words. Target ends at ${PART_TARGET.wordMax.toLocaleString()}.`
+    });
+  } else {
+    issues.push({ severity: "ok", message: "Part word count is inside the target range." });
+  }
+
   if (/\d/.test(clean)) {
     issues.push({ severity: "error", message: "Digits detected. Voiceover text must write all numbers as words." });
   }

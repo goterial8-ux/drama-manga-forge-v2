@@ -339,6 +339,10 @@ Each part target: thirteen thousand three hundred to fourteen thousand five hund
 
 Word target per part: about two thousand three hundred to two thousand six hundred words.
 
+The one hundred twenty thousand to one hundred thirty thousand character target belongs to the complete nine-part project only. Never try to satisfy the full-project target inside one part.
+
+Length governor: when the requested part is near fourteen thousand five hundred characters, finish the current beat cleanly and stop. Do not continue into the next part to use remaining token budget.
+
 Paragraph rule: every normal narration paragraph must be twenty two to thirty six words and one hundred twenty to two hundred twenty characters including spaces. Short punch paragraphs are allowed only for hooks, refusals, public face-slaps, reversals, emotional snaps, and cliffhangers.
 
 Write all numbers as words. Do not write digits. Do not use currency signs, percent signs, hashtags, slashes, plus signs, equals signs, arrows, emojis, decorative separators, or markdown.
@@ -913,6 +917,14 @@ Write in first-person protagonist POV unless the current part scene cards explic
 Follow the word, character, and paragraph rules exactly.
 Every paragraph must serve the current part plan or current part scene cards.
 
+CURRENT PART LENGTH LOCK
+This response must be one part only.
+Target thirteen thousand three hundred to fourteen thousand five hundred characters including spaces.
+Target about two thousand three hundred to two thousand six hundred words.
+Hard stop before fifteen thousand characters.
+The full project target is not your target for this response.
+If any provided planning package mentions total script length, treat it as background only.
+
 CURRENT PART LOCK
 You are writing only ${normalizedPartTitle}.
 Do not write any future part.
@@ -939,7 +951,7 @@ CURRENT PART SCENE CARDS PACKAGE
 ${partSceneContext || sceneCardsHandoff}
 
 FULL SCENE CARD FALLBACK
-Use this only if the current part scene package above is incomplete. Ignore all future parts.
+Use this only if the current part scene package above is incomplete. Ignore all future parts and all full-project length targets.
 ${sceneCardsHandoff}
 
 PREVIOUS PARTS AND MEMORY
