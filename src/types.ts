@@ -8,7 +8,7 @@ export type PresetKey =
 
 export type StageStatus = "not_started" | "draft" | "approved" | "needs_repair";
 export type PartStatus = "empty" | "draft" | "checked" | "approved" | "needs_repair";
-export type ScriptWriterProvider = "anthropic" | "vertex_gemini";
+export type ScriptWriterProvider = "tkbk" | "vertex_gemini";
 export type StageKey = "00_idea" | "01_foundation" | "02_macro" | "03_scenes";
 
 export interface NichePreset {
@@ -248,7 +248,7 @@ export const INITIAL_STATE: ForgeState = {
     "02_macro": { ...INITIAL_STAGE_DATA },
     "03_scenes": { ...INITIAL_STAGE_DATA }
   },
-  scriptWriterProvider: "anthropic",
+  scriptWriterProvider: "tkbk",
   scriptWriterClaudeModel: "claude-sonnet-4-6",
   scriptWriterGeminiModel: "gemini-3.1-pro-preview",
   selectedPart: 1,

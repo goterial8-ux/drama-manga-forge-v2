@@ -45,7 +45,10 @@ type StageRequest = {
   feedback?: string;
 };
 
-const ANTHROPIC_VERSION = "2023-06-01";
+type ScriptWriterProvider = "tkbk" | "vertex_gemini";
+
+const CLAUDE_COMPAT_VERSION = "2023-06-01";
+const DEFAULT_TKBK_CLAUDE_ENDPOINT = "https://api.tkbk.io/claude/v1/messages";
 const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
 const DEFAULT_GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
 const DEFAULT_GEMINI_PRO_MODEL = process.env.GEMINI_PRO_MODEL || "gemini-2.5-pro";
@@ -59,12 +62,17 @@ function envFlag(value: string | undefined): boolean {
 }
 
 function getClaudeModel(model?: string): string {
-  return model || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
+  return model || process.env.CLAUDE_WRITER_MODEL || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
 }
 
-function getScriptWriterProvider(provider?: string): "anthropic" | "vertex_gemini" {
-  const resolved = provider || process.env.SCRIPT_WRITER_PROVIDER || "anthropic";
-  return resolved === "vertex_gemini" ? "vertex_gemini" : "anthropic";
+function getClaudeMaxTokens(maxTokens: number): number {
+  const configured = Number(process.env.CLAUDE_WRITER_MAX_TOKENS || "");
+  return Number.isFinite(configured) && configured > 0 ? configured : maxTokens;
+}
+
+function getScriptWriterProvider(provider?: string): ScriptWriterProvider {
+  const resolved = provider || process.env.CLAUDE_WRITER_PROVIDER || process.env.SCRIPT_WRITER_PROVIDER || "tkbk";
+  return resolved === "vertex_gemini" ? "vertex_gemini" : "tkbk";
 }
 
 function getStageModel(stageId: number): string {
@@ -132,27 +140,18 @@ async function callVertexGemini({
 }
 
 async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8, model }: ClaudeCallOptions): Promise<string> {
-  // Пытаемся получить TKBK API ключ (который начинается с cr_), иначе фоллбэк на Anthropic
-  const apiKey = process.env.TKBK_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.TKBK_API_KEY;
   if (!apiKey) {
-    throw new Error("Missing Claude API key. Add a Claude-compatible key to deployment secrets.");
+    throw new Error("Missing TKBK API key. Add TKBK_API_KEY to deployment secrets.");
   }
 
-  // Если ключ начинается с cr_, шлем запросы на tkbk.io, иначе в стандартный Anthropic API
-  const isTkbk = apiKey.startsWith("cr_");
-  const url = isTkbk ? "https://api.tkbk.io/claude/v1/messages" : "https://api.anthropic.com/v1/messages";
+  const url = process.env.TKBK_CLAUDE_ENDPOINT || DEFAULT_TKBK_CLAUDE_ENDPOINT;
 
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "anthropic-version": ANTHROPIC_VERSION
+    "anthropic-version": CLAUDE_COMPAT_VERSION,
+    "Authorization": `Bearer ${apiKey}`
   };
-
-  // Правильная авторизация для TKBK
-  if (isTkbk) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
-  } else {
-    headers["x-api-key"] = apiKey;
-  }
 
   let lastError: Error | null = null;
 
@@ -162,7 +161,7 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
       headers,
       body: JSON.stringify({
         model: getClaudeModel(model),
-        max_tokens: maxTokens,
+        max_tokens: getClaudeMaxTokens(maxTokens),
         temperature,
         system,
         messages: [
@@ -704,15 +703,14 @@ function buildMemory(partTitle: string, output: string): string {
 app.get("/api/health", (_req, res) => {
   const useVertex = envFlag(process.env.GOOGLE_GENAI_USE_VERTEXAI);
   const hasTkbkKey = Boolean(process.env.TKBK_API_KEY);
-  const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY);
   res.json({
     status: "ok",
     hasTkbkKey,
-    hasOfficialAnthropicKey: hasAnthropicKey,
-    hasClaudeKey: hasTkbkKey || hasAnthropicKey,
+    hasClaudeKey: hasTkbkKey,
     hasVertex: Boolean(useVertex && process.env.GOOGLE_CLOUD_PROJECT),
     claudeModel: getClaudeModel(),
     scriptWriterProvider: getScriptWriterProvider(),
+    tkbkClaudeEndpoint: process.env.TKBK_CLAUDE_ENDPOINT || DEFAULT_TKBK_CLAUDE_ENDPOINT,
     googleGenaiUseVertexAi: process.env.GOOGLE_GENAI_USE_VERTEXAI || "",
     googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT || "",
     googleCloudLocation: process.env.GOOGLE_CLOUD_LOCATION || "global",

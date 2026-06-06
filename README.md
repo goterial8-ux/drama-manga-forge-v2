@@ -84,9 +84,12 @@ GEMINI_PRO_MODEL="gemini-2.5-pro"
 GEMINI_WRITER_MODEL="gemini-3.1-pro-preview"
 GEMINI_WRITER_THINKING_LEVEL="HIGH"
 
-SCRIPT_WRITER_PROVIDER="anthropic"
-ANTHROPIC_API_KEY="your_key_here"
-ANTHROPIC_MODEL="claude-sonnet-4-6"
+CLAUDE_WRITER_PROVIDER="tkbk"
+SCRIPT_WRITER_PROVIDER="tkbk"
+TKBK_API_KEY="your_tkbk_key_here"
+CLAUDE_WRITER_MODEL="claude-sonnet-4-6"
+CLAUDE_WRITER_MAX_TOKENS=8000
+TKBK_CLAUDE_ENDPOINT="https://api.tkbk.io/claude/v1/messages"
 ```
 
 Run:

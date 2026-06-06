@@ -61,6 +61,10 @@ type Health = {
   stageModels?: Record<string, string>;
 };
 
+function normalizeScriptWriterProvider(value: unknown): ScriptWriterProvider {
+  return value === "vertex_gemini" ? "vertex_gemini" : "tkbk";
+}
+
 function hydrateState(parsed: Partial<ForgeState>): ForgeState {
   const stages = { ...INITIAL_STATE.stages };
   STAGES_CONFIG.forEach((stage) => {
@@ -77,7 +81,7 @@ function hydrateState(parsed: Partial<ForgeState>): ForgeState {
     outputLanguage: parsed.outputLanguage || "Russian",
     stageOutputLanguage: parsed.stageOutputLanguage || "Russian",
     scriptOutputLanguage: parsed.scriptOutputLanguage || "English",
-    scriptWriterProvider: parsed.scriptWriterProvider || "anthropic",
+    scriptWriterProvider: normalizeScriptWriterProvider(parsed.scriptWriterProvider),
     scriptWriterClaudeModel: parsed.scriptWriterClaudeModel || INITIAL_STATE.scriptWriterClaudeModel,
     scriptWriterGeminiModel: parsed.scriptWriterGeminiModel || INITIAL_STATE.scriptWriterGeminiModel,
     parts: INITIAL_STATE.parts.map((basePart) => {
@@ -211,7 +215,7 @@ export default function App() {
           hasTkbkKey: Boolean(data.hasTkbkKey),
           hasVertex: data.hasVertex,
           claudeModel: data.claudeModel || "claude-sonnet-4-6",
-          scriptWriterProvider: data.scriptWriterProvider,
+          scriptWriterProvider: normalizeScriptWriterProvider(data.scriptWriterProvider),
           googleCloudLocation: data.googleCloudLocation,
           stageModels: data.stageModels
         })
@@ -538,7 +542,7 @@ export default function App() {
         </div>
         <div className="status-row">
           <span className={health.hasVertex ? "pill ok" : "pill warn"}>{health.hasVertex ? "Vertex ready" : "Vertex missing"}</span>
-          <span className={hasClaudeWriterKey ? "pill ok" : "pill warn"}>{hasClaudeWriterKey ? "Claude key loaded" : "Claude key missing"}</span>
+          <span className={hasClaudeWriterKey ? "pill ok" : "pill warn"}>{hasClaudeWriterKey ? "TKBK key loaded" : "TKBK key missing"}</span>
           <span className="pill">Writer: {selectedWriterModelLabel}</span>
         </div>
       </header>
@@ -733,7 +737,7 @@ export default function App() {
                     onChange={(e) => updateState({ scriptWriterProvider: e.target.value as ScriptWriterProvider })}
                     disabled={isWriting || isAutoWriting}
                   >
-                    <option value="anthropic">Claude writer</option>
+                    <option value="tkbk">TKBK Claude writer</option>
                     <option value="vertex_gemini">Vertex Gemini writer</option>
                   </select>
                 </label>
