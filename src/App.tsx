@@ -3,47 +3,76 @@ import {
   AlertTriangle,
   Check,
   Clipboard,
+  Copy,
   Download,
   FileText,
   Gauge,
+  Layers,
   Library,
   Play,
   RefreshCw,
   Save,
   ShieldCheck,
+  Trash2,
   WandSparkles
 } from "lucide-react";
 import { CORE_NICHE_BIBLE, COMPETITOR_STYLE_RULE } from "./lib/styleBible";
 import {
   buildMemoryFromPart,
-  extractPartSceneCards,
   getMetrics,
   getPreviousTail,
   validatePart
 } from "./lib/validation";
-import { ForgeState, INITIAL_STATE, PARAGRAPH_RULE, PART_TARGET, PRESETS, ScriptPart } from "./types";
+import {
+  ForgeState,
+  INITIAL_STATE,
+  PARAGRAPH_RULE,
+  PART_TARGET,
+  PRESETS,
+  ScriptPart,
+  ScriptWriterProvider,
+  StageData,
+  StageKey,
+  STAGES_CONFIG
+} from "./types";
 
 const STORAGE_KEY = "drama_manga_forge_v2_state";
 
 type Health = {
   hasClaudeKey: boolean;
-  model: string;
-  scriptWriterProvider?: string;
+  hasVertex: boolean;
+  claudeModel: string;
+  scriptWriterProvider?: ScriptWriterProvider;
+  googleCloudLocation?: string;
+  stageModels?: Record<string, string>;
 };
+
+function hydrateState(parsed: Partial<ForgeState>): ForgeState {
+  const stages = { ...INITIAL_STATE.stages };
+  STAGES_CONFIG.forEach((stage) => {
+    stages[stage.key] = {
+      ...INITIAL_STATE.stages[stage.key],
+      ...(parsed.stages?.[stage.key] || {})
+    } as StageData;
+  });
+
+  return {
+    ...INITIAL_STATE,
+    ...parsed,
+    stages,
+    scriptWriterProvider: parsed.scriptWriterProvider || "anthropic",
+    parts: INITIAL_STATE.parts.map((basePart) => {
+      const existing = parsed.parts?.find((part) => part.number === basePart.number);
+      return existing ? { ...basePart, ...existing, checks: existing.checks || [] } : basePart;
+    })
+  };
+}
 
 function loadInitialState(): ForgeState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return INITIAL_STATE;
-    const parsed = JSON.parse(saved) as ForgeState;
-    return {
-      ...INITIAL_STATE,
-      ...parsed,
-      parts: INITIAL_STATE.parts.map((basePart) => {
-        const existing = parsed.parts?.find((part) => part.number === basePart.number);
-        return existing ? { ...basePart, ...existing } : basePart;
-      })
-    };
+    return hydrateState(JSON.parse(saved) as Partial<ForgeState>);
   } catch {
     return INITIAL_STATE;
   }
@@ -63,14 +92,22 @@ function selectedPreset(state: ForgeState) {
   return PRESETS.find((preset) => preset.key === state.preset) || PRESETS[0];
 }
 
+function stageStatusLabel(status: StageData["status"]) {
+  if (status === "not_started") return "empty";
+  return status.replace("_", " ");
+}
+
 export default function App() {
   const [state, setState] = useState<ForgeState>(loadInitialState);
-  const [health, setHealth] = useState<Health>({ hasClaudeKey: false, model: "claude-sonnet-4-6" });
+  const [health, setHealth] = useState<Health>({ hasClaudeKey: false, hasVertex: false, claudeModel: "claude-sonnet-4-6" });
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isGeneratingStage, setIsGeneratingStage] = useState(false);
   const [isWriting, setIsWriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const preset = selectedPreset(state);
+  const activeStageConfig = STAGES_CONFIG[state.activeStageIdx] || STAGES_CONFIG[0];
+  const activeStageData = state.stages[activeStageConfig.key];
   const activePart = state.parts.find((part) => part.number === state.selectedPart) || state.parts[0];
   const activeMetrics = getMetrics(activePart.output);
   const combinedScript = useMemo(
@@ -85,12 +122,34 @@ export default function App() {
   useEffect(() => {
     fetch("/api/health")
       .then((res) => res.json())
-      .then((data) => setHealth({ hasClaudeKey: data.hasClaudeKey, model: data.model }))
-      .catch(() => setHealth({ hasClaudeKey: false, model: "unknown" }));
+      .then((data) =>
+        setHealth({
+          hasClaudeKey: data.hasClaudeKey,
+          hasVertex: data.hasVertex,
+          claudeModel: data.claudeModel || "claude-sonnet-4-6",
+          scriptWriterProvider: data.scriptWriterProvider,
+          googleCloudLocation: data.googleCloudLocation,
+          stageModels: data.stageModels
+        })
+      )
+      .catch(() => setHealth({ hasClaudeKey: false, hasVertex: false, claudeModel: "unknown" }));
   }, []);
 
   const updateState = (patch: Partial<ForgeState>) => {
     setState((prev) => ({ ...prev, ...patch }));
+  };
+
+  const updateStage = (stageKey: StageKey, patch: Partial<StageData>) => {
+    setState((prev) => ({
+      ...prev,
+      stages: {
+        ...prev.stages,
+        [stageKey]: {
+          ...prev.stages[stageKey],
+          ...patch
+        }
+      }
+    }));
   };
 
   const updatePart = (partNumber: number, patch: Partial<ScriptPart>) => {
@@ -100,11 +159,24 @@ export default function App() {
     }));
   };
 
+  const buildPreviousHandoffs = () => {
+    const previousHandoffs: Record<string, string> = {};
+    STAGES_CONFIG.forEach((stage) => {
+      if (stage.id < activeStageConfig.id) {
+        const data = state.stages[stage.key];
+        if (data.output || data.handoff) {
+          previousHandoffs[stage.key] = `[${stage.code} ${stage.name} OUTPUT]\n${data.output}\n\n[${stage.code} ${stage.name} HANDOFF]\n${data.handoff}`;
+        }
+      }
+    });
+    return previousHandoffs;
+  };
+
   const extractStyleBlueprint = async () => {
     setIsExtracting(true);
     setError(null);
     try {
-      const res = await fetch("/api/extract-style-blueprint", {
+      const res = await fetch("/api/analyze-reference", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ competitorScripts: state.competitorScripts })
@@ -114,7 +186,7 @@ export default function App() {
       updateState({
         styleBlueprint: data.blueprint,
         referenceGuard: data.referenceGuard,
-        notes: "Competitor scripts were converted into a style blueprint and anti-copy guard."
+        notes: data.warning ? `Style blueprint fallback used: ${data.warning}` : "Competitor scripts converted into style blueprint and anti-copy guard."
       });
     } catch (err: any) {
       setError(err.message || "Could not extract style blueprint.");
@@ -123,14 +195,76 @@ export default function App() {
     }
   };
 
+  const generateActiveStage = async () => {
+    setIsGeneratingStage(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/generate-stage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stageId: activeStageConfig.id,
+          rawIdea: state.rawIdea,
+          presetLabel: preset.label,
+          presetPromise: preset.promise,
+          outputLanguage: state.outputLanguage,
+          styleBlueprint: state.styleBlueprint,
+          referenceGuard: state.referenceGuard,
+          previousHandoffs: buildPreviousHandoffs(),
+          feedback: activeStageData.feedback
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Failed to generate stage.");
+      updateStage(activeStageConfig.key, {
+        output: data.output,
+        handoff: data.handoff,
+        status: "draft"
+      });
+      updateState({ notes: `${activeStageConfig.code} ${activeStageConfig.name} drafted. Review, edit, and approve before the next stage.` });
+    } catch (err: any) {
+      setError(err.message || "Could not generate stage.");
+    } finally {
+      setIsGeneratingStage(false);
+    }
+  };
+
+  const approveActiveStage = () => {
+    updateStage(activeStageConfig.key, { status: "approved" });
+    updateState({ notes: `${activeStageConfig.code} ${activeStageConfig.name} approved.` });
+  };
+
+  const skipMacroOutline = () => {
+    updateStage("02_macro", {
+      output: "Macro outline intentionally skipped.",
+      handoff: "Use Stage One Foundation DNA directly for Stage Three Scene Cards. Preserve all locked roles, proof logic, hidden cards, and final collapse.",
+      status: "approved"
+    });
+    updateState({ activeStageIdx: 3, notes: "Macro outline skipped. Generate Scene Cards from Foundation DNA." });
+  };
+
+  const nextStage = () => {
+    updateState({ activeStageIdx: Math.min(STAGES_CONFIG.length - 1, state.activeStageIdx + 1) });
+  };
+
+  const copyStageHandoff = async () => {
+    await navigator.clipboard.writeText(activeStageData.handoff || "");
+    updateState({ notes: "Handoff copied." });
+  };
+
   const generateActivePart = async () => {
     setIsWriting(true);
     setError(null);
 
-    const previousParts = state.parts.filter((part) => part.number < activePart.number);
-    const previousPartsMemory = previousParts.map((part) => part.memory).filter(Boolean).join("\n\n");
-    const previousPart = [...previousParts].reverse().find((part) => part.output.trim());
-    const currentPartSceneCards = extractPartSceneCards(state.sceneCards, activePart.title);
+    const stageThree = state.stages["03_scenes"];
+    const previousParts = state.parts.filter((part) => part.number < activePart.number && part.output.trim());
+    const previousPartsOutput = previousParts.map((part) => [
+      `--- ${part.title} ---`,
+      part.output,
+      part.memory ? `[MEMORY]\n${part.memory}` : ""
+    ].filter(Boolean).join("\n"));
+    const previousPart = [...previousParts].reverse()[0];
+    const writerModel = state.scriptWriterProvider === "vertex_gemini" ? "gemini-3.1-pro-preview" : health.claudeModel || "claude-sonnet-4-6";
 
     try {
       const res = await fetch("/api/generate-script-part", {
@@ -144,11 +278,13 @@ export default function App() {
           presetPromise: preset.promise,
           styleBlueprint: state.styleBlueprint,
           referenceGuard: state.referenceGuard,
-          storyDna: state.storyDna,
-          currentPartSceneCards,
-          previousPartsMemory,
+          sceneCardsHandoff: `[FULL STAGE THREE OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
+          previousPartsOutput,
           previousPartTail: previousPart ? getPreviousTail(previousPart.output) : "",
-          avatarEnabled: state.avatarEnabled
+          avatarEnabled: state.avatarEnabled,
+          feedback: activePart.feedback,
+          provider: state.scriptWriterProvider,
+          writerModel
         })
       });
       const data = await res.json();
@@ -160,6 +296,7 @@ export default function App() {
         status: checks.some((issue) => issue.severity === "error") ? "needs_repair" : "draft",
         checks
       });
+      updateState({ notes: `${activePart.title} written with ${data.provider || state.scriptWriterProvider}.` });
     } catch (err: any) {
       setError(err.message || "Could not generate script part.");
     } finally {
@@ -176,6 +313,11 @@ export default function App() {
     });
   };
 
+  const approveActivePart = () => {
+    if (!activePart.output.trim()) return;
+    updatePart(activePart.number, { status: "approved" });
+  };
+
   const clearProject = () => {
     if (!window.confirm("Clear this V2 project state?")) return;
     setState(INITIAL_STATE);
@@ -186,14 +328,12 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">Drama Manga Forge V2</p>
-          <h1>Claude part writer for regret/rebirth manhwa scripts</h1>
+          <h1>Step-by-step niche pipeline with Claude or Vertex Gemini writer</h1>
         </div>
         <div className="status-row">
-          <span className={health.hasClaudeKey ? "pill ok" : "pill warn"}>
-            {health.hasClaudeKey ? "Claude key loaded" : "Claude key missing"}
-          </span>
-          <span className="pill">{health.model}</span>
-          <span className="pill">{health.scriptWriterProvider || "anthropic"}</span>
+          <span className={health.hasVertex ? "pill ok" : "pill warn"}>{health.hasVertex ? "Vertex ready" : "Vertex missing"}</span>
+          <span className={health.hasClaudeKey ? "pill ok" : "pill warn"}>{health.hasClaudeKey ? "Claude key loaded" : "Claude key missing"}</span>
+          <span className="pill">Writer: {state.scriptWriterProvider === "vertex_gemini" ? "Gemini High" : "Claude 4.6"}</span>
         </div>
       </header>
 
@@ -226,12 +366,19 @@ export default function App() {
               <p>{preset.promise}</p>
             </div>
             <label>
-              Raw idea
+              Output language
+              <select value={state.outputLanguage} onChange={(e) => updateState({ outputLanguage: e.target.value as ForgeState["outputLanguage"] })}>
+                <option value="English">English</option>
+                <option value="Russian">Russian</option>
+              </select>
+            </label>
+            <label>
+              Raw title or idea
               <textarea
                 value={state.rawIdea}
                 onChange={(e) => updateState({ rawIdea: e.target.value })}
-                placeholder="Paste the raw story idea here. Keep it messy if needed."
-                rows={7}
+                placeholder="Paste the title, hook, or messy situation here."
+                rows={8}
               />
             </label>
           </section>
@@ -241,16 +388,13 @@ export default function App() {
               <Library size={16} />
               Competitor Style Library
             </div>
-            <p className="hint">
-              Paste competitor scripts here. They are used only to extract rhythm, paragraph flow, hook pressure, and regret timing.
-            </p>
             <textarea
               value={state.competitorScripts}
               onChange={(e) => updateState({ competitorScripts: e.target.value })}
-              placeholder="Paste one or more competitor scripts. The writer will never receive them as plot source."
-              rows={10}
+              placeholder="Paste competitor scripts. They become a style blueprint, not plot source."
+              rows={13}
             />
-            <button className="primary-button" onClick={extractStyleBlueprint} disabled={isExtracting || !state.competitorScripts.trim()}>
+            <button className="primary-button full" onClick={extractStyleBlueprint} disabled={isExtracting || !state.competitorScripts.trim()}>
               {isExtracting ? <RefreshCw className="spin" size={16} /> : <ShieldCheck size={16} />}
               Extract Style Blueprint
             </button>
@@ -260,53 +404,89 @@ export default function App() {
         <main className="main-panel">
           <section className="panel block">
             <div className="block-title">
-              <ShieldCheck size={16} />
-              Locked Style Blueprint
+              <Layers size={16} />
+              Planning Pipeline
             </div>
-            <div className="grid-two">
-              <label>
-                Style blueprint
-                <textarea
-                  value={state.styleBlueprint}
-                  onChange={(e) => updateState({ styleBlueprint: e.target.value })}
-                  placeholder="Extract from competitor scripts or paste a manual style blueprint."
-                  rows={9}
-                />
-              </label>
-              <label>
-                Reference guard
-                <textarea
-                  value={state.referenceGuard}
-                  onChange={(e) => updateState({ referenceGuard: e.target.value })}
-                  placeholder="Anti-copy guard generated from references."
-                  rows={9}
-                />
-              </label>
+            <div className="stage-tabs">
+              {STAGES_CONFIG.map((stage) => {
+                const data = state.stages[stage.key];
+                return (
+                  <button
+                    key={stage.key}
+                    className={stage.id === state.activeStageIdx ? "stage-tab active" : `stage-tab ${data.status}`}
+                    onClick={() => updateState({ activeStageIdx: stage.id })}
+                  >
+                    <strong>{stage.code}</strong>
+                    <span>{stage.name}</span>
+                    <small>{stageStatusLabel(data.status)}</small>
+                  </button>
+                );
+              })}
             </div>
-          </section>
 
-          <section className="panel block">
-            <div className="block-title">
-              <FileText size={16} />
-              Story DNA and Scene Cards
+            <div className="stage-head">
+              <div>
+                <h2>{activeStageConfig.code} {activeStageConfig.name}</h2>
+                <p className="hint">{activeStageConfig.description}</p>
+              </div>
+              <div className="status-row">
+                <span className="pill">{activeStageConfig.model}</span>
+                {activeStageConfig.optional && <span className="pill warn">optional</span>}
+              </div>
             </div>
+
+            <label>
+              Stage feedback
+              <textarea
+                value={activeStageData.feedback}
+                onChange={(e) => updateStage(activeStageConfig.key, { feedback: e.target.value })}
+                placeholder="Optional correction for this stage before generation."
+                rows={3}
+              />
+            </label>
+
+            <div className="stage-controls">
+              <button className="primary-button" onClick={generateActiveStage} disabled={isGeneratingStage}>
+                {isGeneratingStage ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
+                Generate Stage
+              </button>
+              {activeStageConfig.key === "02_macro" && (
+                <button className="secondary-button" onClick={skipMacroOutline} disabled={isGeneratingStage}>
+                  Skip Macro
+                </button>
+              )}
+              <button className="secondary-button" onClick={approveActiveStage} disabled={!activeStageData.output.trim()}>
+                <Check size={16} />
+                Approve Stage
+              </button>
+              <button className="secondary-button" onClick={nextStage} disabled={state.activeStageIdx >= STAGES_CONFIG.length - 1}>
+                Next Stage
+              </button>
+              <button className="ghost-button" onClick={copyStageHandoff} disabled={!activeStageData.handoff.trim()}>
+                <Copy size={16} />
+                Copy Handoff
+              </button>
+            </div>
+
             <div className="grid-two">
               <label>
-                Approved story DNA
+                Stage output
                 <textarea
-                  value={state.storyDna}
-                  onChange={(e) => updateState({ storyDna: e.target.value })}
-                  placeholder="Lock the premise, protagonist wound, betrayal, hidden advantage, proof system, regret track, and final payoff."
-                  rows={12}
+                  className="stage-textarea"
+                  value={activeStageData.output}
+                  onChange={(e) => updateStage(activeStageConfig.key, { output: e.target.value, status: "draft" })}
+                  placeholder="Generated stage document appears here."
+                  rows={16}
                 />
               </label>
               <label>
-                Approved scene cards by part
+                Handoff package
                 <textarea
-                  value={state.sceneCards}
-                  onChange={(e) => updateState({ sceneCards: e.target.value })}
-                  placeholder={"Use headings like:\nPART ONE\n- Hook...\n- Scene...\n\nPART TWO\n- Scene..."}
-                  rows={12}
+                  className="stage-textarea"
+                  value={activeStageData.handoff}
+                  onChange={(e) => updateStage(activeStageConfig.key, { handoff: e.target.value, status: "draft" })}
+                  placeholder="Compact handoff for the next stage appears here."
+                  rows={16}
                 />
               </label>
             </div>
@@ -316,15 +496,29 @@ export default function App() {
             <div className="writer-head">
               <div>
                 <div className="block-title">
-                  <Play size={16} />
-                  Claude Part Writer
+                  <FileText size={16} />
+                  Stage Four Part Writer
                 </div>
-                <p className="hint">Claude writes only the selected part, strictly from its scene cards.</p>
+                <p className="hint">Scene Cards are the source of truth. The writer outputs one clean .txt part only.</p>
               </div>
               <div className="writer-actions">
+                <label className="compact-label">
+                  Writer model
+                  <select
+                    value={state.scriptWriterProvider}
+                    onChange={(e) => updateState({ scriptWriterProvider: e.target.value as ScriptWriterProvider })}
+                  >
+                    <option value="anthropic">Claude Sonnet 4.6</option>
+                    <option value="vertex_gemini">Vertex Gemini 3.1 Pro Preview High</option>
+                  </select>
+                </label>
                 <button className="secondary-button" onClick={checkActivePart} disabled={!activePart.output}>
                   <Gauge size={16} />
                   Check Part
+                </button>
+                <button className="secondary-button" onClick={approveActivePart} disabled={!activePart.output}>
+                  <Check size={16} />
+                  Approve Part
                 </button>
                 <button
                   className="secondary-button"
@@ -334,7 +528,7 @@ export default function App() {
                   <Download size={16} />
                   Part TXT
                 </button>
-                <button className="primary-button" onClick={generateActivePart} disabled={isWriting}>
+                <button className="primary-button" onClick={generateActivePart} disabled={isWriting || !state.stages["03_scenes"].output.trim()}>
                   {isWriting ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
                   Generate {activePart.title}
                 </button>
@@ -353,6 +547,16 @@ export default function App() {
                 </button>
               ))}
             </div>
+
+            <label>
+              Part feedback
+              <textarea
+                value={activePart.feedback}
+                onChange={(e) => updatePart(activePart.number, { feedback: e.target.value })}
+                placeholder="Optional instruction for this part: more tension, stricter first person, fix ending hook, etc."
+                rows={3}
+              />
+            </label>
 
             <textarea
               className="script-output"
@@ -384,11 +588,12 @@ export default function App() {
               Locked Rules
             </div>
             <div className="rule-list">
+              <p>Stage Zero and One: {health.stageModels?.idea || "gemini-2.5-flash"}.</p>
+              <p>Macro outline: Gemini 2.5 Pro, optional.</p>
+              <p>Scene cards: Gemini 2.5 Pro.</p>
+              <p>Writer switch: Claude Sonnet 4.6 or Vertex Gemini 3.1 Pro Preview High.</p>
               <p>Part target: {PART_TARGET.idealMin.toLocaleString()}-{PART_TARGET.idealMax.toLocaleString()} chars.</p>
-              <p>Hard bounds: {PART_TARGET.min.toLocaleString()}-{PART_TARGET.max.toLocaleString()} chars.</p>
-              <p>Normal paragraph: {PARAGRAPH_RULE.minWords}-{PARAGRAPH_RULE.maxWords} words.</p>
-              <p>Normal paragraph chars: {PARAGRAPH_RULE.minChars}-{PARAGRAPH_RULE.maxChars} including spaces.</p>
-              <p>Write only selected part. Output clean .txt text.</p>
+              <p>Paragraph: {PARAGRAPH_RULE.minWords}-{PARAGRAPH_RULE.maxWords} words, {PARAGRAPH_RULE.minChars}-{PARAGRAPH_RULE.maxChars} chars.</p>
             </div>
             <label className="checkbox-row">
               <input
@@ -396,7 +601,7 @@ export default function App() {
                 checked={state.avatarEnabled}
                 onChange={(e) => updateState({ avatarEnabled: e.target.checked })}
               />
-              Enable three avatar commentary blocks in parts three, six, and nine
+              Enable avatar commentary in parts three, six, and nine
             </label>
           </section>
 
@@ -432,6 +637,7 @@ export default function App() {
               Download Full Script
             </button>
             <button className="ghost-button full" onClick={clearProject}>
+              <Trash2 size={16} />
               Clear Local Project
             </button>
           </section>
