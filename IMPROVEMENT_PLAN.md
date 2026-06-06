@@ -2,93 +2,75 @@
 
 ## Chosen Direction
 
-We chose Option Two: a clean V2 app based on the useful logic of the old software, but without the overloaded AI supervisor.
+We chose Option Two: a clean V2 app based on the useful logic of the old step-by-step software, but without the overloaded AI supervisor.
 
-The V2 principle:
+The current V2 principle:
 
-Planning data is locked by the user.
-Competitor scripts become a style blueprint.
-Claude writes only one requested part.
-The checker validates technical rules.
+- competitor scripts become a style blueprint and anti-copy guard;
+- Vertex Gemini handles planning stages;
+- the user reviews and approves each stage;
+- the script writer writes only one requested part;
+- only the script writer has a model switch.
+
+## Current Pipeline
+
+1. Competitor Style Blueprint
+   - Model: Gemini 2.5 Flash through Vertex AI.
+   - Extracts rhythm, paragraph flow, hook pressure, regret timing, dialogue density, and payoff cadence.
+   - Blocks plot copying.
+
+2. Stage Zero: Idea Setup
+   - Model: Gemini 2.5 Flash through Vertex AI.
+   - Develops the raw title or situation into a producer-ready premise, hook, opening fingerprint, proof system, and title package.
+
+3. Stage One: Foundation DNA
+   - Model: Gemini 2.5 Flash through Vertex AI.
+   - Locks character functions, emotional chain, regret ladder, antagonist escalation, hidden cards, proof system, and face-slap variation.
+
+4. Stage Two: Macro Outline
+   - Model: Gemini 2.5 Pro through Vertex AI.
+   - Optional.
+   - Builds a full nine-part master outline with target length, payoff map, avatar placement, hidden card timing, and scene-card requirements.
+
+5. Stage Three: Scene Cards
+   - Model: Gemini 2.5 Pro through Vertex AI.
+   - Creates the scene matrix for all nine parts.
+   - This becomes the source of truth for the writer.
+
+6. Stage Four: Part Writer
+   - Switch one: Claude Sonnet 4.6 through Anthropic API.
+   - Switch two: Vertex Gemini 3.1 Pro Preview High.
+   - Writes only the selected part as clean `.txt` narration.
 
 ## Why This Should Write Better Scripts
 
-The old software overloads the final writer with too many jobs:
+The writer no longer has to invent the story, supervise itself, plan hidden cards, and write the final script all at once.
 
-- think through the whole story;
-- obey a huge prompt stack;
-- preserve competitor style;
-- avoid copying;
-- write a long part;
-- output memory;
-- clean voiceover text;
-- follow QA rules.
-
-V2 removes that overload.
-
-Claude receives a smaller, sharper task:
+It receives a smaller, sharper task:
 
 Write exactly this part.
 Use these scene cards.
-Use first-person competitor-style rhythm.
+Keep first-person competitor-style rhythm.
 Do not copy competitor plots.
 Hit this character range.
 Follow this paragraph rule.
 Output clean `.txt` text.
 
-## Competitor Style Handling
+## Paragraph Rule
 
-Competitor scripts are integrated in two layers:
+For 120 to 220 characters including spaces, the practical English target is about 22 to 36 words per normal paragraph.
 
-1. Style Blueprint
+This is why the writer prompt uses:
 
-Extracts:
-
-- hook rhythm;
-- first conflict timing;
-- first-person voice;
-- paragraph flow;
-- dialogue density;
-- face-slap timing;
-- regret pacing;
-- dopamine beat frequency;
-- part-ending hook style.
-
-2. Reference Guard
-
-Blocks:
-
-- copied plots;
-- copied scenes;
-- copied names;
-- copied locations;
-- copied proof objects;
-- copied relationship setups;
-- copied final punishments;
-- copied dialogue.
-
-This lets the output feel like the niche without becoming a rewrite of a competitor script.
-
-## V2 Pipeline
-
-1. Choose Niche Preset
-2. Paste Raw Idea
-3. Paste Competitor Scripts
-4. Extract Style Blueprint
-5. Lock Story DNA
-6. Lock Scene Cards by Part
-7. Generate Selected Part with Claude
-8. Run Deterministic Checker
-9. Repair Manually or Regenerate
-10. Export `.txt`
+- 120 to 220 characters;
+- 22 to 36 words;
+- short punch paragraphs only for hooks, refusals, reversals, humiliation, emotional snaps, or cliffhangers.
 
 ## Next Improvements
 
-1. Add a one-click Story DNA builder from raw idea.
-2. Add a one-click Scene Card builder from Story DNA.
-3. Add per-part repair prompts.
+1. Add per-part repair prompts.
+2. Add one-click full auto-write with stop/resume.
+3. Add title scoring from competitor hooks.
 4. Add local reference-script file loader.
-5. Add title and thumbnail package generator.
-6. Add full-script continuity checker.
-7. Add a GitHub publish workflow after the repo is created remotely.
-
+5. Add full-script continuity checker as an optional, separate tool.
+6. Add export profiles for narrator-only, narrator-plus-avatar, and production markers.
