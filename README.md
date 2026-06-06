@@ -1,33 +1,46 @@
 # Drama Manga Forge V2
 
-Clean V2 pipeline for English manhwa-style drama scripts.
+Step-by-step software for English manhwa-style drama scripts.
 
-## Why V2 Exists
+The app now follows the old step-by-step planning logic, but without an AI supervisor stage:
 
-The old app tried to make one large prompt handle planning, supervision, script writing, QA, and cleanup at the same time. V2 separates the work:
+1. Competitor scripts become a style blueprint and anti-copy guard.
+2. Stage Zero develops the raw title or idea.
+3. Stage One locks the story DNA.
+4. Stage Two creates the optional nine-part macro outline.
+5. Stage Three creates detailed scene cards with Gemini 2.5 Pro.
+6. Stage Four writes one selected part as clean `.txt` narration.
 
-1. Competitor scripts become a style blueprint.
-2. Story DNA and scene cards stay locked.
-3. Claude writes only the selected part.
-4. A deterministic checker verifies length, paragraph rules, digits, avatar tags, and prompt residue.
+## Model Setup
 
-There is no AI supervisor in this version.
+Planning stages use Gemini through Vertex AI:
+
+- Stage Zero Idea Setup: `gemini-2.5-flash`
+- Stage One Foundation DNA: `gemini-2.5-flash`
+- Stage Two Macro Outline: `gemini-2.5-pro`, optional
+- Stage Three Scene Cards: `gemini-2.5-pro`
+
+The script writer is the only place with a switch:
+
+- `Claude Sonnet 4.6` through Anthropic API
+- `Vertex Gemini 3.1 Pro Preview High` through Vertex AI
 
 ## Competitor Scripts
 
-Paste competitor scripts into **Competitor Style Library** and click **Extract Style Blueprint**.
+Competitor scripts are used only as style references.
 
-The app sends the references to Claude only for style extraction:
+Allowed to extract:
 
 - hook rhythm;
-- paragraph flow;
 - first-person voice;
+- paragraph flow;
 - dialogue density;
 - regret timing;
 - payoff frequency;
-- face-slap mechanics.
+- face-slap mechanics;
+- part-ending hook style.
 
-The app also creates a **Reference Guard**, which tells the writer not to copy:
+Blocked from copying:
 
 - plots;
 - scenes;
@@ -38,11 +51,7 @@ The app also creates a **Reference Guard**, which tells the writer not to copy:
 - relationship setups;
 - final collapse mechanics.
 
-The final script writer receives the blueprint and guard, not a command to reuse source plots.
-
-## Claude Writer Rules
-
-Claude writes one part at a time.
+## Script Writer Rules
 
 Each part target:
 
@@ -59,81 +68,52 @@ Paragraph rule:
 
 ## Local Run
 
-1. Install dependencies:
-
 ```bash
 npm install
 ```
 
-2. Create `.env.local`:
+Create `.env.local`:
 
 ```bash
-ANTHROPIC_API_KEY="your_key_here"
-ANTHROPIC_MODEL="claude-sonnet-4-6"
-SCRIPT_WRITER_PROVIDER="anthropic"
 GOOGLE_GENAI_USE_VERTEXAI="True"
 GOOGLE_CLOUD_PROJECT="project-b05a94d2-9b34-450b-b8e"
 GOOGLE_CLOUD_LOCATION="global"
+
+GEMINI_FAST_MODEL="gemini-2.5-flash"
+GEMINI_PRO_MODEL="gemini-2.5-pro"
+GEMINI_WRITER_MODEL="gemini-3.1-pro-preview"
+GEMINI_WRITER_THINKING_LEVEL="HIGH"
+
+SCRIPT_WRITER_PROVIDER="anthropic"
+ANTHROPIC_API_KEY="your_key_here"
+ANTHROPIC_MODEL="claude-sonnet-4-6"
 ```
 
-3. Run:
+Run:
 
 ```bash
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
-
-## Deploy to Cloud Run
-
-Recommended path: deploy from source with Cloud Build and store the Anthropic key in Secret Manager.
-
-In Google Cloud Shell:
-
-```bash
-gcloud config set project YOUR_PROJECT_ID
-
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
-```
-
-Create the secret:
-
-```bash
-printf "YOUR_ANTHROPIC_KEY" | gcloud secrets create anthropic-api-key --data-file=- --replication-policy="automatic"
-```
-
-Allow the default Cloud Run runtime service account to read the secret:
-
-```bash
-PROJECT_ID="$(gcloud config get-value project)"
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")"
-
-gcloud secrets add-iam-policy-binding anthropic-api-key \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
-
-Deploy from the project folder:
-
-```bash
-gcloud run deploy drama-manga-forge-v2 \
-  --source . \
-  --region europe-west1 \
-  --allow-unauthenticated \
-  --set-secrets ANTHROPIC_API_KEY=anthropic-api-key:latest \
-  --set-env-vars ANTHROPIC_MODEL=claude-sonnet-4-6,SCRIPT_WRITER_PROVIDER=anthropic,GOOGLE_GENAI_USE_VERTEXAI=True,GOOGLE_CLOUD_PROJECT=project-b05a94d2-9b34-450b-b8e,GOOGLE_CLOUD_LOCATION=global,NODE_ENV=production
-```
-
-For a private app, replace `--allow-unauthenticated` with `--no-allow-unauthenticated`.
+Open `http://localhost:3000`.
 
 ## Recommended Workflow
 
-1. Select a niche preset.
+1. Paste title or raw situation.
 2. Paste competitor scripts.
 3. Extract style blueprint.
-4. Fill Story DNA.
-5. Fill Scene Cards with `PART ONE`, `PART TWO`, etc.
-6. Generate one part.
-7. Run Check Part.
-8. Repair or approve manually.
-9. Download part `.txt` or full script `.txt`.
+4. Generate Stage Zero.
+5. Approve Stage Zero.
+6. Generate Stage One.
+7. Approve Stage One.
+8. Either skip Stage Two or generate the macro outline.
+9. Generate Stage Three scene cards.
+10. Select writer model.
+11. Generate one part at a time.
+12. Check, edit, approve, and download `.txt`.
+
+## Sharing With Other People
+
+You can share the GitHub repo. Each person should deploy their own Cloud Run service or create their own `.env.local` locally.
+
+Do not commit real API keys. Put keys in `.env.local` for local use or Secret Manager for Cloud Run.
