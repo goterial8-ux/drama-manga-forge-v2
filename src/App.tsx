@@ -19,6 +19,7 @@ import {
 import { CORE_NICHE_BIBLE, COMPETITOR_STYLE_RULE } from "./lib/styleBible";
 import {
   buildMemoryFromPart,
+  getLastNonEmptyLine,
   getMetrics,
   getPreviousTail,
   validatePart
@@ -357,10 +358,9 @@ export default function App() {
       partToWrite.title
     );
     const previousParts = workingParts.filter((part) => part.number < partToWrite.number && part.output.trim());
-    const previousPartsOutput = previousParts.map((part) => [
-      `--- ${part.title} ---`,
-      part.output,
-      part.memory ? `[MEMORY]\n${part.memory}` : ""
+    const previousPartsMemory = previousParts.map((part) => [
+      `--- ${part.title} MEMORY ---`,
+      part.memory || buildMemoryFromPart(part.title, part.output)
     ].filter(Boolean).join("\n"));
     const previousPart = [...previousParts].reverse()[0];
     const writerModel = selectedWriterModel || (state.scriptWriterProvider === "vertex_gemini" ? "gemini-3.1-pro-preview" : health.claudeModel || "claude-sonnet-4-6");
@@ -378,8 +378,9 @@ export default function App() {
         sceneCardsHandoff: `[FULL STAGE THREE OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
         partPlanContext,
         partSceneContext,
-        previousPartsOutput,
-        previousPartTail: previousPart ? getPreviousTail(previousPart.output) : "",
+        previousPartsMemory,
+        previousPartLastLine: previousPart ? getLastNonEmptyLine(previousPart.output) : "",
+        previousPartTail: previousPart ? getPreviousTail(previousPart.output, 800) : "",
         avatarEnabled: state.avatarEnabled,
         feedback: partToWrite.feedback,
         provider: state.scriptWriterProvider,

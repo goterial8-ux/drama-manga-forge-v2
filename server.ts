@@ -848,7 +848,9 @@ app.post("/api/generate-script-part", async (req, res) => {
     sceneCardsHandoff,
     partPlanContext,
     partSceneContext,
+    previousPartsMemory,
     previousPartsOutput,
+    previousPartLastLine,
     previousPartTail,
     avatarEnabled,
     feedback,
@@ -868,9 +870,21 @@ app.post("/api/generate-script-part", async (req, res) => {
   const resolvedProvider = getScriptWriterProvider(provider);
   const normalizedPartTitle = String(partTitle).toUpperCase();
   const shouldAvatar = Boolean(avatarEnabled) && [3, 6, 9].includes(Number(partNumber));
-  const previousContext = Array.isArray(previousPartsOutput) && previousPartsOutput.length
-    ? previousPartsOutput.join("\n\n")
+  const previousContextSource = Array.isArray(previousPartsMemory) && previousPartsMemory.length
+    ? previousPartsMemory
+    : Array.isArray(previousPartsOutput)
+      ? previousPartsOutput
+      : [];
+  const previousContext = previousContextSource.length
+    ? previousContextSource.map((entry: any) => String(entry).slice(0, 1200)).join("\n\n")
     : "No previous parts yet. This is the opening voice and style anchor.";
+  const currentPartScenePackage = String(partSceneContext || "").trim();
+  const limitedSceneFallback = String(sceneCardsHandoff || "").trim().slice(0, 6000);
+  const fallbackInstruction = currentPartScenePackage
+    ? "Full Stage Three fallback is intentionally suppressed because a current-part scene package was extracted. Stay inside the current part package above."
+    : limitedSceneFallback || "No fallback available. Use only the current part lock.";
+  const continuityLastLine = String(previousPartLastLine || "").trim();
+  const continuityTail = String(previousPartTail || "").trim().slice(-800);
 
   const system = `
 You are 04 FINAL SCRIPT, an elite long-form YouTube manhwa-style drama recap scriptwriter.
@@ -917,6 +931,25 @@ Write in first-person protagonist POV unless the current part scene cards explic
 Follow the word, character, and paragraph rules exactly.
 Every paragraph must serve the current part plan or current part scene cards.
 
+STYLE ANCHOR FOR EVERY SCENE
+Before each scene, silently reset to these rules.
+Do not output this checklist.
+First-person protagonist POV stays active unless the current scene card explicitly says otherwise.
+The protagonist must stay emotionally hurt but controlled, observant, decisive, and difficult to manipulate.
+He must not become passive, randomly cruel, instantly forgiving, generic, or melodramatic.
+Sentences stay voiceover-friendly. Avoid long winding sentences and stacked clauses.
+Paragraphs stay short, direct, and pressure-based.
+Every two to four paragraphs must add action, reaction, proof, status shift, enemy mistake, public pressure, regret movement, or payoff setup.
+Competitor style means rhythm, pressure, paragraph shape, regret timing, and payoff density only.
+Genre contract stays active: humiliation, clean break, hidden value, proof, regret, public face-slap, emotional payoff.
+
+SCENE-BY-SCENE WRITING LOOP
+Write through the current part scene cards in order.
+For each scene card, silently apply this loop: hook pressure, protagonist action, opponent reaction, proof or status shift, emotional consequence, exit hook.
+After each scene, silently re-anchor the POV, paragraph rhythm, genre contract, and protagonist behavior before continuing.
+Do not merge future-part events into the current scene.
+Do not stretch a scene with generic reflection after its payoff lands.
+
 CURRENT PART LENGTH LOCK
 This response must be one part only.
 Target thirteen thousand three hundred to fourteen thousand five hundred characters including spaces.
@@ -948,17 +981,21 @@ CURRENT PART PLAN PACKAGE
 ${partPlanContext || "No focused Stage Two plan was extracted. Use the current part lock and Stage Three scene cards only."}
 
 CURRENT PART SCENE CARDS PACKAGE
-${partSceneContext || sceneCardsHandoff}
+${currentPartScenePackage || "No focused current-part scene cards were extracted. Use the current part lock, current plan package, and limited fallback only."}
 
 FULL SCENE CARD FALLBACK
-Use this only if the current part scene package above is incomplete. Ignore all future parts and all full-project length targets.
-${sceneCardsHandoff}
+Use this only if the current part scene package above is missing. Ignore all future parts and all full-project length targets.
+${fallbackInstruction}
 
 PREVIOUS PARTS AND MEMORY
 ${previousContext}
 
+LAST LINE OF PREVIOUS GENERATED TEXT
+${continuityLastLine || "No previous generated line."}
+Continue from this line's emotional and status state. Do not repeat the line.
+
 ENDING TAIL OF PREVIOUS PART
-${previousPartTail || "No previous part tail."}
+${continuityTail || "No previous part tail."}
 
 USER FEEDBACK FOR THIS PART
 ${feedback || "No extra feedback."}

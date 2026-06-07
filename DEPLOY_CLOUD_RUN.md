@@ -70,7 +70,7 @@ gcloud run deploy drama-manga-forge-v2 \
   --timeout=900s \
   --allow-unauthenticated \
   --set-secrets TKBK_API_KEY=tkbk-api-key:latest \
-  --set-env-vars NODE_ENV=production,GOOGLE_GENAI_USE_VERTEXAI=True,GOOGLE_CLOUD_PROJECT=project-b05a94d2-9b34-450b-b8e,GOOGLE_CLOUD_LOCATION=global,GEMINI_FAST_MODEL=gemini-2.5-flash,GEMINI_PRO_MODEL=gemini-2.5-pro,GEMINI_WRITER_MODEL=gemini-3.1-pro-preview,GEMINI_WRITER_THINKING_LEVEL=HIGH,CLAUDE_WRITER_PROVIDER=tkbk,SCRIPT_WRITER_PROVIDER=tkbk,CLAUDE_WRITER_MODEL=claude-sonnet-4-6,CLAUDE_WRITER_MAX_TOKENS=5000,TKBK_CLAUDE_ENDPOINT=https://api.tkbk.io/claude/v1/messages
+  --set-env-vars NODE_ENV=production,GOOGLE_GENAI_USE_VERTEXAI=True,GOOGLE_CLOUD_PROJECT=project-b05a94d2-9b34-450b-b8e,GOOGLE_CLOUD_LOCATION=global,GEMINI_FAST_MODEL=gemini-2.5-flash,GEMINI_PRO_MODEL=gemini-2.5-pro,GEMINI_WRITER_MODEL=gemini-3.1-pro-preview,GEMINI_WRITER_THINKING_LEVEL=HIGH,CLAUDE_WRITER_PROVIDER=tkbk,SCRIPT_WRITER_PROVIDER=tkbk,CLAUDE_WRITER_MODEL=claude-sonnet-4-6,CLAUDE_WRITER_MAX_TOKENS=6500,TKBK_CLAUDE_ENDPOINT=https://api.tkbk.io/claude/v1/messages
 ```
 
 For a private app, replace `--allow-unauthenticated` with `--no-allow-unauthenticated`.

@@ -169,7 +169,17 @@ export function extractPartSceneCards(sceneCards: string, partTitle: string): st
   return match ? `${partTitle}\n${match[2].trim()}` : sceneCards;
 }
 
-export function getPreviousTail(text: string, maxChars = 1200): string {
+export function getPreviousTail(text: string, maxChars = 800): string {
   const clean = text.trim();
   return clean.length > maxChars ? clean.slice(-maxChars) : clean;
+}
+
+export function getLastNonEmptyLine(text: string): string {
+  const lines = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return lines[lines.length - 1] || "";
 }
