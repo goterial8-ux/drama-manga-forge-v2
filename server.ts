@@ -268,8 +268,7 @@ async function callAnthropicCompatible({
           .map((block: any) => block.text)
       : [];
 
-    const text = textBlocks.join("
-").trim();
+    const text = textBlocks.join("\n").trim();
     if (text) return text;
 
     lastError = new Error("Anthropic-compatible provider returned JSON without text content.");
