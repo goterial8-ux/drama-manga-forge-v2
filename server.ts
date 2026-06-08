@@ -80,6 +80,20 @@ function getAnthropicMaxTokens(maxTokens: number): number {
   return Number.isFinite(configured) && configured > 0 ? configured : maxTokens;
 }
 
+function getAnthropicTemperature(defaultValue = 0.8): number {
+  const configured = Number(
+    process.env.ANTHROPIC_TEMPERATURE ||
+      process.env.CLAUDE_WRITER_TEMPERATURE ||
+      ""
+  );
+
+  if (Number.isFinite(configured) && configured >= 0 && configured <= 2) {
+    return configured;
+  }
+
+  return defaultValue;
+}
+
 function getScriptWriterProvider(provider?: string): ScriptWriterProvider {
   const resolved = String(
     provider ||
@@ -216,7 +230,7 @@ async function callAnthropicCompatible({
       body: JSON.stringify({
         model: getAnthropicModel(model),
         max_tokens: getAnthropicMaxTokens(maxTokens),
-        temperature,
+        temperature: getAnthropicTemperature(temperature),
         system,
         messages: [
           {
@@ -819,6 +833,7 @@ app.get("/api/health", (_req, res) => {
     hasVertex: Boolean(useVertex && process.env.GOOGLE_CLOUD_PROJECT),
     scriptWriterModel: getAnthropicModel(),
     scriptWriterProvider: getScriptWriterProvider(),
+    anthropicTemperature: getAnthropicTemperature(0.82),
     anthropicBaseUrl: getAnthropicBaseUrl(),
     anthropicMessagesEndpoint: getAnthropicMessagesEndpoint(),
     googleGenaiUseVertexAi: process.env.GOOGLE_GENAI_USE_VERTEXAI || "",
