@@ -5,4 +5,5 @@ dist
 .DS_Store
 *.log
 public/reference-scripts/*.txt
-
+opencode.json
+.opencode/

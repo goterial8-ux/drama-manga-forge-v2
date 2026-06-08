@@ -60,6 +60,7 @@ export interface ForgeState {
   competitorScripts: string;
   styleBlueprint: string;
   referenceGuard: string;
+  characterLock: string;
   activeStageIdx: number;
   stages: Record<StageKey, StageData>;
   scriptWriterProvider: ScriptWriterProvider;
@@ -241,6 +242,7 @@ export const INITIAL_STATE: ForgeState = {
   competitorScripts: "",
   styleBlueprint: "",
   referenceGuard: "",
+  characterLock: "",
   activeStageIdx: 0,
   stages: {
     "00_idea": { ...INITIAL_STAGE_DATA },

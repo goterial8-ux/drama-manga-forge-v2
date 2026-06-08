@@ -45,10 +45,10 @@ type StageRequest = {
   feedback?: string;
 };
 
-type ScriptWriterProvider = "tkbk" | "vertex_gemini";
+type ScriptWriterProvider = "anthropic" | "vertex_gemini";
 
-const CLAUDE_COMPAT_VERSION = "2023-06-01";
-const DEFAULT_TKBK_CLAUDE_ENDPOINT = "https://api.tkbk.io/claude/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+const DEFAULT_ANTHROPIC_BASE_URL = "https://aiprimetech.io/v1";
 const DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6";
 const DEFAULT_GEMINI_FAST_MODEL = process.env.GEMINI_FAST_MODEL || "gemini-2.5-flash";
 const DEFAULT_GEMINI_PRO_MODEL = process.env.GEMINI_PRO_MODEL || "gemini-2.5-pro";
@@ -61,18 +61,34 @@ function envFlag(value: string | undefined): boolean {
   return value === "True" || value === "true" || value === "1";
 }
 
-function getClaudeModel(model?: string): string {
-  return model || process.env.CLAUDE_WRITER_MODEL || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
+function getAnthropicModel(model?: string): string {
+  return (
+    model ||
+    process.env.ANTHROPIC_MODEL ||
+    process.env.CLAUDE_WRITER_MODEL ||
+    process.env.CLAUDE_MODEL ||
+    DEFAULT_CLAUDE_MODEL
+  );
 }
 
-function getClaudeMaxTokens(maxTokens: number): number {
-  const configured = Number(process.env.CLAUDE_WRITER_MAX_TOKENS || "");
+function getAnthropicMaxTokens(maxTokens: number): number {
+  const configured = Number(
+    process.env.ANTHROPIC_MAX_TOKENS ||
+      process.env.CLAUDE_WRITER_MAX_TOKENS ||
+      ""
+  );
   return Number.isFinite(configured) && configured > 0 ? configured : maxTokens;
 }
 
 function getScriptWriterProvider(provider?: string): ScriptWriterProvider {
-  const resolved = provider || process.env.CLAUDE_WRITER_PROVIDER || process.env.SCRIPT_WRITER_PROVIDER || "tkbk";
-  return resolved === "vertex_gemini" ? "vertex_gemini" : "tkbk";
+  const resolved = String(
+    provider ||
+      process.env.SCRIPT_WRITER_PROVIDER ||
+      process.env.WRITER_PROVIDER ||
+      "anthropic"
+  ).trim().toLowerCase();
+
+  return resolved === "vertex_gemini" ? "vertex_gemini" : "anthropic";
 }
 
 function getStageModel(stageId: number): string {
@@ -139,29 +155,67 @@ async function callVertexGemini({
   return stripThinkingBlocks(String((response as any).text || "")).trim();
 }
 
-async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8, model }: ClaudeCallOptions): Promise<string> {
-  const apiKey = process.env.TKBK_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing TKBK API key. Add TKBK_API_KEY to deployment secrets.");
+function getAnthropicApiKey(): string {
+  return (
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.CLAUDE_COMPAT_API_KEY ||
+    process.env.AIPRIME_API_KEY ||
+    ""
+  ).trim();
+}
+
+function getAnthropicBaseUrl(): string {
+  return (
+    process.env.ANTHROPIC_BASE_URL ||
+    process.env.CLAUDE_COMPAT_BASE_URL ||
+    DEFAULT_ANTHROPIC_BASE_URL
+  ).replace(/\/+$/, "");
+}
+
+function getAnthropicMessagesEndpoint(): string {
+  const explicit =
+    process.env.ANTHROPIC_MESSAGES_ENDPOINT ||
+    process.env.CLAUDE_COMPAT_MESSAGES_ENDPOINT;
+
+  if (explicit && explicit.trim()) {
+    return explicit.trim();
   }
 
-  const url = process.env.TKBK_CLAUDE_ENDPOINT || DEFAULT_TKBK_CLAUDE_ENDPOINT;
+  return `${getAnthropicBaseUrl()}/messages`;
+}
+
+async function callAnthropicCompatible({
+  system,
+  prompt,
+  maxTokens = 8192,
+  temperature = 0.8,
+  model
+}: ClaudeCallOptions): Promise<string> {
+  const apiKey = getAnthropicApiKey();
+  if (!apiKey) {
+    throw new Error(
+      "Missing Anthropic-compatible API key. Set ANTHROPIC_API_KEY in deployment secrets."
+    );
+  }
+
+  const endpoint = getAnthropicMessagesEndpoint();
 
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "anthropic-version": CLAUDE_COMPAT_VERSION,
-    "Authorization": `Bearer ${apiKey}`
+    "anthropic-version": ANTHROPIC_VERSION,
+    "Authorization": `Bearer ${apiKey}`,
+    "x-api-key": apiKey
   };
 
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const response = await fetch(url, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        model: getClaudeModel(model),
-        max_tokens: getClaudeMaxTokens(maxTokens),
+        model: getAnthropicModel(model),
+        max_tokens: getAnthropicMaxTokens(maxTokens),
         temperature,
         system,
         messages: [
@@ -181,7 +235,7 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
         data = JSON.parse(raw);
       } catch {
         lastError = new Error(
-          `Claude upstream returned non-JSON (${response.status} ${response.statusText}): ${raw.slice(0, 1000)}`
+          `Anthropic-compatible provider returned non-JSON (${response.status} ${response.statusText}): ${raw.slice(0, 1000)}`
         );
 
         if (response.status >= 500 && attempt < 3) {
@@ -194,7 +248,10 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
     }
 
     if (!response.ok) {
-      const message = data?.error?.message || data?.message || `Claude upstream failed with ${response.status} ${response.statusText}`;
+      const message =
+        data?.error?.message ||
+        data?.message ||
+        `Anthropic-compatible provider failed with ${response.status} ${response.statusText}`;
       lastError = new Error(message);
 
       if ((response.status === 429 || response.status >= 500) && attempt < 3) {
@@ -211,17 +268,18 @@ async function callClaude({ system, prompt, maxTokens = 8192, temperature = 0.8,
           .map((block: any) => block.text)
       : [];
 
-    const text = textBlocks.join("\n").trim();
+    const text = textBlocks.join("
+").trim();
     if (text) return text;
 
-    lastError = new Error("Claude upstream returned JSON without text content.");
+    lastError = new Error("Anthropic-compatible provider returned JSON without text content.");
     if (attempt < 3) {
       await wait(900 * attempt);
       continue;
     }
   }
 
-  throw lastError || new Error("Claude upstream failed without an error response.");
+  throw lastError || new Error("Anthropic-compatible provider failed without an error response.");
 }
 
 function sampleReferenceText(text: string, maxChars = 90000): string {
@@ -343,7 +401,7 @@ The one hundred twenty thousand to one hundred thirty thousand character target 
 
 Length governor: when the requested part is near fourteen thousand five hundred characters, finish the current beat cleanly and stop. Do not continue into the next part to use remaining token budget.
 
-Paragraph rule: every normal narration paragraph must be twenty two to thirty six words and one hundred twenty to two hundred twenty characters including spaces. Short punch paragraphs are allowed only for hooks, refusals, public face-slaps, reversals, emotional snaps, and cliffhangers.
+Paragraph rule: short punch sentences are the default weapon of this genre. A sentence can be two words if the beat demands it. Normal narration paragraphs run fifteen to thirty words. Never pad a sentence to reach a word count. Short hits land harder: use them for hooks, refusals, status shifts, reversals, emotional snaps, realizations, and cliffhangers. Avoid stacking three or more long complex sentences in a row without a short break.
 
 Write all numbers as words. Do not write digits. Do not use currency signs, percent signs, hashtags, slashes, plus signs, equals signs, arrows, emojis, decorative separators, or markdown.
 
@@ -506,6 +564,38 @@ STAGE OUTPUT SECTIONS
 HANDOFF PACKAGE MUST INCLUDE
 title package summary, story DNA, character functions, protagonist control logic, regret ladder, antagonist escalation ladder, true ally function, hidden cards, proof system, face-slap map, pacing notes, surfaces to avoid, main risks, and key rule for the outline or scene cards.
 
+After the HANDOFF PACKAGE, output a second clearly marked block:
+
+### CHARACTER LOCK
+Write a compact character lock in this exact format. This block is passed directly to the script writer on every part. Keep it under four hundred words total.
+
+PROTAGONIST
+Name: [full name, including any alias or new identity]
+Voice: First person. [2-3 words describing emotional state — e.g. hurt but controlled]
+Core trait: [how he thinks and acts — one sentence]
+Forbidden: [list 4-6 things he must never do or become]
+
+ANTAGONIST(S)
+Name: [name]
+Function: [what role they play in the story — one sentence]
+Weakness: [what exposes or breaks them]
+[Repeat block for each major antagonist]
+
+TRUE ALLY
+Name: [name]
+Function: [what they do for the protagonist — one sentence]
+Rule: [how they behave — one sentence]
+
+BETRAYERS
+[Name] — [one sentence: why they betrayed and what drives them now]
+[Repeat for each betrayer]
+
+LOCKED BEHAVIOUR RULES
+- Protagonist never [X]
+- Antagonist always [X] under pressure
+- Ally never [X]
+[Add 3-5 rules total]
+
 ${exactTwoSections}
 `
     };
@@ -638,30 +728,46 @@ ${exactTwoSections}
   };
 }
 
-function parseStageResponse(responseText: string): { output: string; handoff: string } {
+function parseStageResponse(responseText: string): { output: string; handoff: string; characterLock?: string } {
   const outputMarker = "### STAGE OUTPUT";
   const handoffMarker = "### HANDOFF PACKAGE";
+  const characterLockMarker = "### CHARACTER LOCK";
   const outputIdx = responseText.indexOf(outputMarker);
   const handoffIdx = responseText.indexOf(handoffMarker);
+  const characterLockIdx = responseText.indexOf(characterLockMarker);
+
+  let output = "";
+  let handoff = "";
+  let characterLock: string | undefined;
 
   if (outputIdx !== -1 && handoffIdx !== -1) {
     if (outputIdx < handoffIdx) {
-      return {
-        output: responseText.slice(outputIdx + outputMarker.length, handoffIdx).trim(),
-        handoff: responseText.slice(handoffIdx + handoffMarker.length).trim()
-      };
+      output = responseText.slice(outputIdx + outputMarker.length, handoffIdx).trim();
+      if (characterLockIdx !== -1 && characterLockIdx > handoffIdx) {
+        handoff = responseText.slice(handoffIdx + handoffMarker.length, characterLockIdx).trim();
+        characterLock = responseText.slice(characterLockIdx + characterLockMarker.length).trim();
+      } else {
+        handoff = responseText.slice(handoffIdx + handoffMarker.length).trim();
+      }
+    } else {
+      output = responseText;
+      handoff = "";
     }
-
-    return {
-      handoff: responseText.slice(handoffIdx + handoffMarker.length, outputIdx).trim(),
-      output: responseText.slice(outputIdx + outputMarker.length).trim()
-    };
+  } else if (handoffIdx !== -1) {
+    if (characterLockIdx !== -1 && characterLockIdx > handoffIdx) {
+      output = responseText.slice(0, handoffIdx).trim();
+      handoff = responseText.slice(handoffIdx + handoffMarker.length, characterLockIdx).trim();
+      characterLock = responseText.slice(characterLockIdx + characterLockMarker.length).trim();
+    } else {
+      output = responseText.slice(0, handoffIdx).trim();
+      handoff = responseText.slice(handoffIdx + handoffMarker.length).trim();
+    }
+  } else {
+    output = responseText;
+    handoff = "";
   }
 
-  return {
-    output: responseText.trim(),
-    handoff: "Handoff details are included inside the stage output. Review and edit before continuing."
-  };
+  return { output, handoff, characterLock };
 }
 
 function sanitizeScriptOutput(text: string, partTitle: string): string {
@@ -706,15 +812,16 @@ function buildMemory(partTitle: string, output: string): string {
 
 app.get("/api/health", (_req, res) => {
   const useVertex = envFlag(process.env.GOOGLE_GENAI_USE_VERTEXAI);
-  const hasTkbkKey = Boolean(process.env.TKBK_API_KEY);
+  const hasAnthropicKey = Boolean(getAnthropicApiKey());
   res.json({
     status: "ok",
-    hasTkbkKey,
-    hasClaudeKey: hasTkbkKey,
+    hasAnthropicKey,
+    hasClaudeKey: hasAnthropicKey,
     hasVertex: Boolean(useVertex && process.env.GOOGLE_CLOUD_PROJECT),
-    claudeModel: getClaudeModel(),
+    scriptWriterModel: getAnthropicModel(),
     scriptWriterProvider: getScriptWriterProvider(),
-    tkbkClaudeEndpoint: process.env.TKBK_CLAUDE_ENDPOINT || DEFAULT_TKBK_CLAUDE_ENDPOINT,
+    anthropicBaseUrl: getAnthropicBaseUrl(),
+    anthropicMessagesEndpoint: getAnthropicMessagesEndpoint(),
     googleGenaiUseVertexAi: process.env.GOOGLE_GENAI_USE_VERTEXAI || "",
     googleCloudProject: process.env.GOOGLE_CLOUD_PROJECT || "",
     googleCloudLocation: process.env.GOOGLE_CLOUD_LOCATION || "global",
@@ -845,6 +952,7 @@ app.post("/api/generate-script-part", async (req, res) => {
     presetPromise,
     styleBlueprint,
     referenceGuard,
+    characterLock,
     sceneCardsHandoff,
     partPlanContext,
     partSceneContext,
@@ -866,7 +974,7 @@ app.post("/api/generate-script-part", async (req, res) => {
     return res.status(400).json({ error: "Stage Three scene cards are required before writing." });
   }
 
-  // Переключение провайдера для генерации сценария. Поддерживаем выбор между Vertex AI и Claude (tkbk API)
+  // Переключение провайдера для генерации сценария. По умолчанию используется Anthropic-compatible provider через AIPRIME/OpenCode-style baseURL.
   const resolvedProvider = getScriptWriterProvider(provider);
   const normalizedPartTitle = String(partTitle).toUpperCase();
   const shouldAvatar = Boolean(avatarEnabled) && [3, 6, 9].includes(Number(partNumber));
@@ -974,6 +1082,9 @@ ${nicheContract}
 STYLE BLUEPRINT
 ${styleBlueprint || "No extracted blueprint. Use the built-in English manhwa drama recap style."}
 
+CHARACTER LOCK
+${characterLock || "No character lock provided. Infer characters from the scene cards and foundation DNA. Keep protagonist hurt-but-controlled, strategic, never pathetic."}
+
 REFERENCE GUARD
 ${referenceGuard || "Do not copy competitor plot, names, locations, proof objects, exact dialogue, scene choreography, or final collapse mechanics."}
 
@@ -1027,12 +1138,12 @@ Begin immediately with ${normalizedPartTitle}.
           temperature: 0.78,
           thinkingLevel: DEFAULT_GEMINI_WRITER_THINKING
         })
-      : await callClaude({
+      : await callAnthropicCompatible({
           system,
           prompt,
           maxTokens: 9000,
           temperature: 0.82,
-          model: writerModel || getClaudeModel()
+          model: writerModel || getAnthropicModel()
         });
 
     const output = sanitizeScriptOutput(raw, normalizedPartTitle);
@@ -1040,7 +1151,7 @@ Begin immediately with ${normalizedPartTitle}.
       output,
       memory: buildMemory(normalizedPartTitle, output),
       provider: resolvedProvider,
-      model: resolvedProvider === "vertex_gemini" ? writerModel || DEFAULT_GEMINI_WRITER_MODEL : writerModel || getClaudeModel()
+      model: resolvedProvider === "vertex_gemini" ? writerModel || DEFAULT_GEMINI_WRITER_MODEL : writerModel || getAnthropicModel()
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

@@ -313,6 +313,9 @@ export default function App() {
         handoff: data.handoff,
         status: "draft"
       });
+      if (data.characterLock && activeStageConfig.key === "01_foundation") {
+        updateState({ characterLock: data.characterLock });
+      }
       updateState({ notes: `${activeStageConfig.code} ${activeStageConfig.name} drafted. Review, edit, and approve before the next stage.` });
     } catch (err: any) {
       setError(err.message || "Could not generate stage.");
@@ -375,6 +378,7 @@ export default function App() {
         presetPromise: preset.promise,
         styleBlueprint: state.styleBlueprint,
         referenceGuard: state.referenceGuard,
+        characterLock: state.characterLock,
         sceneCardsHandoff: `[FULL STAGE THREE OUTPUT]\n${stageThree.output}\n\n[STAGE THREE HANDOFF]\n${stageThree.handoff}`,
         partPlanContext,
         partSceneContext,
@@ -627,6 +631,32 @@ export default function App() {
               {isExtracting ? <RefreshCw className="spin" size={16} /> : <ShieldCheck size={16} />}
               Extract Style Blueprint
             </button>
+          </section>
+
+          <section className="block">
+            <div className="block-title">
+              <WandSparkles size={16} />
+              Character Lock
+            </div>
+            <p className="hint" style={{ marginBottom: "8px" }}>
+              Auto-filled from Stage 01. Edit freely. Passed to the writer on every part.
+            </p>
+            <textarea
+              value={state.characterLock}
+              onChange={(e) => updateState({ characterLock: e.target.value })}
+              placeholder={"PROTAGONIST\nName: ...\nVoice: First person. Hurt but controlled.\nCore trait: ...\nForbidden: melodrama, instant forgiveness\n\nANTAGONIST\nName: ...\nFunction: ...\nWeakness: ...\n\nTRUE ALLY\nName: ...\nFunction: ...\nRule: ...\n\nBETRAYERS\n[Name] — [one sentence]"}
+              rows={16}
+            />
+            {state.characterLock.trim() && (
+              <button
+                className="ghost-button"
+                style={{ marginTop: "6px" }}
+                onClick={() => updateState({ characterLock: "" })}
+              >
+                <Trash2 size={14} />
+                Clear Character Lock
+              </button>
+            )}
           </section>
         </aside>
 
